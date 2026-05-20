@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Mod id="civ7-tot-victory-forecaster-local" version="1">
+	<Properties>
+		<Name>LOC_MOD_TOT_VF_NAME</Name>
+		<Description>LOC_MOD_TOT_VF_DESCRIPTION</Description>
+		<Authors>josephcasey</Authors>
+	</Properties>
+	<Dependencies>
+		<Mod id="base-standard" title="LOC_MODULE_BASE_STANDARD_NAME"/>
+	</Dependencies>
+	<ActionGroups>
+		<!-- Shell scope: mod-browser display text -->
+		<ActionGroup id="vf-shell" scope="shell" criteria="always" loadOrder="1000">
+			<Actions>
+				<ImportFiles>
+					<Item>text/en_us/ModInfoText.xml</Item>
+				</ImportFiles>
+			</Actions>
+		</ActionGroup>
+		<!-- Game scope: main JS + in-game text -->
+		<ActionGroup id="vf-game" scope="game" criteria="always" loadOrder="1000">
+			<Actions>
+				<ImportFiles>
+					<Item>ui/victory-forecaster/victory-forecaster.js</Item>
+					<Item>text/en_us/InGameText.xml</Item>
+				</ImportFiles>
+			</Actions>
+		</ActionGroup>
+	</ActionGroups>
+</Mod>

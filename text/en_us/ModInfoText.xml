@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Database>
+	<LocalizedText>
+		<Row Tag="LOC_MOD_TOT_VF_NAME" Language="en_US">
+			<Text>ToT Victory Forecaster</Text>
+		</Row>
+		<Row Tag="LOC_MOD_TOT_VF_DESCRIPTION" Language="en_US">
+			<Text>Adds a "VF" button to the top bar. Click it to see which players are predicted to meet the next Test of Time victory threshold lowering in the Modern age. Flags "ON TRACK" players whose score trajectory will satisfy the upcoming ×multiplier requirement before the threshold changes.</Text>
+		</Row>
+	</LocalizedText>
+</Database>
