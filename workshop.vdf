@@ -1,0 +1,11 @@
+"workshopitem"
+{
+	"appid"			"1295660"
+	"publishedfileid"	""
+	"contentfolder"		""
+	"previewfile"		""
+	"visibility"		"0"
+	"title"			"ToT Victory Forecaster"
+	"description"		"Automatically flags players ON TRACK to meet the next Test of Time threshold lowering in the Modern age. Augments the victory screen with per-player score rankings and ON TRACK badges — no user interaction required."
+	"changenote"		"Initial release"
+}
