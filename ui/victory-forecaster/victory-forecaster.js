@@ -1,27 +1,21 @@
 // Civ7 Test of Time Victory Forecaster — Phase 1
-// Flags players "on victory track" when their projected score will meet
-// the next (or subsequent) ToT threshold lowering in the Modern age.
 //
-// Dominance victory (Military / Culture / Economic):
-//   Win = hold (own score ≥ multiplier × second-place score) for 5 turns.
+// Automatically augments every panel-advisor-victory on the victory screen
+// with a per-player ON TRACK forecast strip. No button, no user action required.
+//
+// ToT Dominance victories (Military / Culture / Economic):
+//   Win = hold (score ≥ multiplier × 2nd-place score) for 5 turns.
 //   Modern age multipliers lower over time: 3× → 2× → 1.5× → 1.25×
+//
 // Science victory:
-//   Win = reach 100 Innovation points + have a launch pad + 5-turn countdown.
+//   Win = reach 100 Innovation points + launch pad + 5-turn countdown.
 
-// ── CONSTANTS ──────────────────────────────────────────────────────
+// ── THRESHOLD CONSTANTS ────────────────────────────────────────────
+//
+// Multipliers are confirmed from the ToT Dev Diary (2026-05-19).
+// agePoints timing is ESTIMATED at equal spacing across 200 pts (standard speed).
+// Calibrate by watching the threshold-change event in-game and updating these values.
 
-const VF_LOG_TAG   = '[TOT-VF]';
-const VF_BUTTON_ID = 'vf-forecaster-button';
-const VF_POPUP_ID  = 'vf-forecaster-popup';
-
-const MOD_DISPLAY_NAME  = 'Victory Forecaster';
-const MOD_VERSION_LABEL = 'v0.1 · ToT 1.4.0';
-
-// Modern Age threshold schedule.
-// Each entry becomes active at (or after) the listed cumulative age-progression points.
-// Source: Civ7 Test of Time Dev Diary, 2026-05-19 — multipliers confirmed.
-// ⚠ TIMING (agePoints) is ESTIMATED from equal-spacing across 200 pts (standard speed).
-//   Verify by watching the in-game threshold change events and update these values.
 const MODERN_THRESHOLDS = [
   { agePoints:   0, multiplier: 3.00 },
   { agePoints:  60, multiplier: 2.00 },
@@ -29,35 +23,11 @@ const MODERN_THRESHOLDS = [
   { agePoints: 150, multiplier: 1.25 },
 ];
 
-// Science victory: fixed Innovation point target (confirmed from dev diary).
-const SCIENCE_INNOVATION_TARGET = 100;
-
-// Maximum age-progression points by game speed (from victories.xml).
-const MAX_AGE_POINTS_BY_SPEED = {
-  Abbreviated: 160,
-  Standard:    200,
-  Long:        240,
-};
-const MAX_AGE_POINTS_DEFAULT = 200;
-
-// Hold duration (turns) required once threshold is met (confirmed from dev diary).
-const DOMINANCE_HOLD_TURNS = 5;
-
-// Victory class-type strings to recognise in processedVictoryData.
-// The ToT DLC may use either the legacy-path class keys or the victory class keys —
-// we try both so the mod works regardless of which the DLC registers.
-const CLASS_KEYS = {
-  Military: ['LEGACY_PATH_CLASS_MILITARY', 'VICTORY_CLASS_MILITARY'],
-  Science:  ['LEGACY_PATH_CLASS_SCIENCE',  'VICTORY_CLASS_SCIENCE'],
-  Culture:  ['LEGACY_PATH_CLASS_CULTURE',  'VICTORY_CLASS_CULTURE'],
-  Economic: ['LEGACY_PATH_CLASS_ECONOMIC', 'VICTORY_CLASS_ECONOMIC'],
-};
-
-const MODERN_AGE_TYPE = 'AGE_MODERN';
-
-const TOP_BAR_ANCHOR    = '#ps-icons';
-const INJECT_INTERVAL   = 500;   // ms between injection attempts
-const INJECT_MAX_TRIES  = 60;
+const SCIENCE_INNOVATION_TARGET = 100;   // confirmed from dev diary
+const MODERN_AGE_TYPE            = 'AGE_MODERN';
+const VF_SECTION_CLASS           = 'vf-forecast-section';
+const VF_LOG_TAG                 = '[TOT-VF]';
+const MODEL_UPDATE_CHAIN_DELAY   = 600; // ms — wait for panel module to set model.onUpdate first
 
 // ── LOGGING ────────────────────────────────────────────────────────
 
@@ -67,517 +37,448 @@ function vfLog(msg, data) {
   } catch { /* never throw from logging */ }
 }
 
-// ── SINGLETON ──────────────────────────────────────────────────────
+// ── GAME DATA HELPERS ──────────────────────────────────────────────
+
+// Convert the advisor-type attribute (number) to the legacy-path class string.
+// AdvisorTypes is a global enum in Civ7; we build the map at runtime.
+const ADVISOR_TO_CLASS = (() => {
+  if (typeof AdvisorTypes !== 'undefined') {
+    return new Map([
+      [AdvisorTypes.SCIENCE,  'LEGACY_PATH_CLASS_SCIENCE'],
+      [AdvisorTypes.MILITARY, 'LEGACY_PATH_CLASS_MILITARY'],
+      [AdvisorTypes.CULTURE,  'LEGACY_PATH_CLASS_CULTURE'],
+      [AdvisorTypes.ECONOMIC, 'LEGACY_PATH_CLASS_ECONOMIC'],
+    ]);
+  }
+  // Numeric fallback — values match the standard Civ7 AdvisorTypes enum.
+  return new Map([
+    [1, 'LEGACY_PATH_CLASS_SCIENCE'],
+    [2, 'LEGACY_PATH_CLASS_MILITARY'],
+    [3, 'LEGACY_PATH_CLASS_CULTURE'],
+    [4, 'LEGACY_PATH_CLASS_ECONOMIC'],
+  ]);
+})();
+
+function getClassType(advisorTypeAttr) {
+  return ADVISOR_TO_CLASS.get(Number(advisorTypeAttr)) ?? null;
+}
+
+function getCurrentAgeType() {
+  try {
+    return GameInfo?.Ages?.lookup?.(Game.age)?.AgeType ?? null;
+  } catch { return null; }
+}
+
+function getCurrentAgePoints() {
+  try {
+    const mgr = Game.AgeProgressManager;
+    if (!mgr) return 0;
+    // Try every property name the engine version may use.
+    for (const k of ['currentPoints', 'progressPoints', 'totalProgressPoints', 'points']) {
+      const v = typeof mgr[k] === 'function' ? mgr[k]() : mgr[k];
+      if (typeof v === 'number' && isFinite(v) && v >= 0) return v;
+    }
+  } catch { /* fall through */ }
+  try { return typeof Game.turn === 'number' ? Game.turn : 0; } catch { return 0; }
+}
+
+function getMaxAgePoints() {
+  try {
+    const ageType = getCurrentAgeType();
+    const row = GameInfo?.AgeProgressions?.find?.(r => r.AgeType === ageType);
+    if (row) return row.MaxPoints_Standard ?? 200;
+  } catch { /* fall through */ }
+  return 200;
+}
+
+// Read all players' score entries for one victory type.
+// Returns Array<{isLocal, pid, score, maxScore}> or null if unavailable.
+function readPlayerScores(classType) {
+  const ageType = getCurrentAgeType();
+  if (!ageType) { vfLog('no ageType'); return null; }
+
+  // Primary source: g_AdvisorProgressModel (keyed by ageType string, already processed).
+  let ageData = null;
+  try {
+    const model = window.g_AdvisorProgressModel;
+    if (model?.victoryData?.get) {
+      ageData = model.victoryData.get(ageType);
+    }
+  } catch { /* ignore */ }
+
+  // Fallback: VictoryManager global if exposed.
+  if (!ageData) {
+    try {
+      const raw = typeof VictoryManager !== 'undefined'
+        ? VictoryManager?.processedVictoryData
+        : null;
+      if (raw?.get) {
+        ageData = raw.get(ageType) ?? raw.get(Game.age);
+      }
+    } catch { /* ignore */ }
+  }
+
+  if (!ageData) { vfLog('no ageData', { ageType }); return null; }
+
+  const vc = ageData.find(v => (v.ClassType ?? v.classType) === classType);
+  if (!vc?.playerData) { vfLog('no playerData', { classType }); return null; }
+
+  return Array.from(vc.playerData).map(p => ({
+    isLocal:  p.isLocalPlayer ?? false,
+    pid:      p.playerId ?? p.playerID ?? p.id ?? p.ID ?? null,
+    score:    p.currentScore ?? p.CurrentScore ?? 0,
+    maxScore: p.maxScore    ?? p.MaxScore     ?? 0,
+  }));
+}
+
+function getPlayerLabel(p, fallbackIndex) {
+  if (p.isLocal) {
+    try {
+      const pl = Players.get(GameContext.localPlayerID);
+      return (pl?.name ?? pl?.civName ?? 'You') + ' ★'; // ★
+    } catch { return 'You ★'; }
+  }
+  if (p.pid != null) {
+    try {
+      const pl = Players.get(p.pid);
+      const n = pl?.name ?? pl?.civName ?? null;
+      if (n) return n;
+    } catch { /* ignore */ }
+  }
+  return `Opponent ${fallbackIndex + 1}`;
+}
+
+// ── THRESHOLD LOGIC ────────────────────────────────────────────────
+
+function activeThreshold(agePoints) {
+  let t = MODERN_THRESHOLDS[0];
+  for (const entry of MODERN_THRESHOLDS) {
+    if (entry.agePoints <= agePoints) t = entry;
+  }
+  return t;
+}
+
+function upcomingThresholds(agePoints) {
+  return MODERN_THRESHOLDS.filter(t => t.agePoints > agePoints);
+}
+
+// For a Dominance victory: is this player projected to satisfy any of the next 2
+// threshold lowerings before they occur (linear extrapolation)?
+function dominanceOnTrack(player, allPlayers, agePoints) {
+  if (agePoints <= 0 || player.score <= 0) return { onTrack: false };
+  const myRate = player.score / agePoints;
+  const others = allPlayers.filter(p => p !== player);
+
+  for (const t of upcomingThresholds(agePoints).slice(0, 2)) {
+    const ahead   = t.agePoints - agePoints;
+    const myProj  = player.score + myRate * ahead;
+    const otherPr = others.map(p => p.score + (agePoints > 0 ? (p.score / agePoints) * ahead : 0));
+    const secondPr = otherPr.length ? Math.max(...otherPr) : 0;
+
+    if (myProj >= t.multiplier * Math.max(secondPr, 1)) {
+      return { onTrack: true, multiplier: t.multiplier, atPoints: t.agePoints };
+    }
+  }
+  return { onTrack: false };
+}
+
+// For Science: is this player projected to reach 100 Innovation before the age ends?
+function scienceOnTrack(player, agePoints, maxAgePoints) {
+  if (player.score >= SCIENCE_INNOVATION_TARGET) return { onTrack: true, alreadyMet: true };
+  if (agePoints <= 0) return { onTrack: false };
+  const rate = player.score / agePoints;
+  if (rate <= 0) return { onTrack: false };
+  return { onTrack: player.score + rate * (maxAgePoints - agePoints) >= SCIENCE_INNOVATION_TARGET };
+}
+
+// ── DOM INJECTION ──────────────────────────────────────────────────
+
+function injectForecast(panelEl) {
+  // Remove stale section on re-inject.
+  panelEl.querySelector('.' + VF_SECTION_CLASS)?.remove();
+
+  const advisorAttr = panelEl.getAttribute('advisor-type');
+  if (advisorAttr == null) return;
+
+  const classType = getClassType(advisorAttr);
+  if (!classType) { vfLog('unknown advisor type', { advisorAttr }); return; }
+
+  const ageType   = getCurrentAgeType();
+  const isModern  = ageType === MODERN_AGE_TYPE;
+  const isScience = classType === 'LEGACY_PATH_CLASS_SCIENCE';
+  const agePoints = getCurrentAgePoints();
+  const maxPts    = getMaxAgePoints();
+  const active    = activeThreshold(agePoints);
+  const upcoming  = upcomingThresholds(agePoints);
+
+  const players = readPlayerScores(classType);
+  if (!players || players.length === 0) {
+    vfLog('no player scores', { classType, ageType });
+    return;
+  }
+
+  // Sort descending by score; compute ON TRACK for each.
+  const sorted = [...players].sort((a, b) => b.score - a.score);
+  const topScore = sorted[0]?.score ?? 1;
+
+  const rows = sorted.map((p, i) => {
+    let track;
+    if (!isModern) {
+      track = { onTrack: false };
+    } else if (isScience) {
+      track = scienceOnTrack(p, agePoints, maxPts);
+    } else {
+      track = dominanceOnTrack(p, sorted, agePoints);
+    }
+    return { p, rank: i + 1, track };
+  });
+
+  // ── Build section element ────────────────────────────────────────
+
+  const section = document.createElement('div');
+  section.className = VF_SECTION_CLASS;
+  Object.assign(section.style, {
+    marginTop:  '14px',
+    padding:    '8px 14px 10px',
+    borderTop:  '1px solid rgba(255,255,255,0.10)',
+    fontFamily: 'Arial,sans-serif',
+    fontSize:   '11px',
+    color:      '#c8ced4',
+    lineHeight: '1.35',
+  });
+
+  // Header row: "VICTORY TRACK" left, threshold chain right
+  const header = document.createElement('div');
+  Object.assign(header.style, {
+    display:        'flex',
+    justifyContent: 'space-between',
+    alignItems:     'center',
+    marginBottom:   '7px',
+  });
+
+  const headerTitle = document.createElement('span');
+  headerTitle.textContent = 'Victory Track';
+  Object.assign(headerTitle.style, {
+    color:         '#f6d56e',
+    fontSize:      '10px',
+    fontWeight:    'bold',
+    letterSpacing: '0.07em',
+    textTransform: 'uppercase',
+  });
+
+  const headerRight = document.createElement('span');
+  Object.assign(headerRight.style, { color: '#607080', fontSize: '10px' });
+  if (isModern) {
+    headerRight.textContent = upcoming.length
+      ? [active, ...upcoming.slice(0, 2)].map(t => t.multiplier + '×').join(' → ')
+      : active.multiplier + '× (final)';
+  } else {
+    headerRight.textContent = 'Modern age only';
+  }
+
+  header.appendChild(headerTitle);
+  header.appendChild(headerRight);
+  section.appendChild(header);
+
+  // Player rows
+  for (const { p, rank, track } of rows) {
+    const label  = getPlayerLabel(p, rank - 1);
+    const barPct = topScore > 0 ? Math.min(100, (p.score / topScore) * 100) : 0;
+    const score  = Math.round(p.score);
+
+    const row = document.createElement('div');
+    Object.assign(row.style, {
+      display:      'flex',
+      alignItems:   'center',
+      gap:          '7px',
+      padding:      '2px 4px',
+      borderRadius: '3px',
+      marginBottom: '1px',
+      background:   (track.onTrack && isModern) ? 'rgba(38,95,48,0.22)' : 'transparent',
+    });
+
+    // Rank number
+    const rankEl = document.createElement('span');
+    rankEl.textContent = rank + '.';
+    Object.assign(rankEl.style, {
+      width:     '16px',
+      textAlign: 'right',
+      color:     rank === 1 ? '#f6d56e' : '#4a5a6a',
+      fontSize:  '10px',
+      flexShrink:'0',
+    });
+
+    // Player name
+    const nameEl = document.createElement('span');
+    nameEl.textContent = label;
+    Object.assign(nameEl.style, {
+      width:        '120px',
+      flexShrink:   '0',
+      overflow:     'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace:   'nowrap',
+      color:        p.isLocal ? '#f6d56e' : '#b8c4d0',
+      fontSize:     '11px',
+    });
+
+    // Mini bar track
+    const barTrack = document.createElement('div');
+    Object.assign(barTrack.style, {
+      flex:        '1',
+      height:      '3px',
+      background:  'rgba(255,255,255,0.07)',
+      borderRadius:'2px',
+      overflow:    'hidden',
+      minWidth:    '48px',
+    });
+    const barFill = document.createElement('div');
+    Object.assign(barFill.style, {
+      height:      '100%',
+      width:       barPct.toFixed(1) + '%',
+      background:  (track.onTrack && isModern)
+        ? '#3aaa4a'
+        : (rank === 1 ? '#c8a030' : '#3a5070'),
+      borderRadius:'2px',
+      transition:  'width 0.3s ease',
+    });
+    barTrack.appendChild(barFill);
+
+    // Score
+    const scoreEl = document.createElement('span');
+    scoreEl.textContent = score.toLocaleString();
+    Object.assign(scoreEl.style, {
+      width:     '44px',
+      textAlign: 'right',
+      color:     '#708090',
+      flexShrink:'0',
+      fontSize:  '10px',
+    });
+
+    // ON TRACK badge (or empty spacer)
+    const badgeEl = document.createElement('span');
+    Object.assign(badgeEl.style, { flexShrink: '0', minWidth: '34px', textAlign: 'left' });
+    if (track.onTrack && isModern) {
+      const label = track.alreadyMet
+        ? 'MET'
+        : ('×' + (track.multiplier ?? ''));   // ×1.5 etc.
+      badgeEl.textContent = label;
+      Object.assign(badgeEl.style, {
+        display:     'inline-block',
+        padding:     '1px 4px',
+        background:  '#1b5425',
+        color:       '#6dfa7e',
+        border:      '1px solid #378a46',
+        borderRadius:'3px',
+        fontSize:    '9px',
+        fontWeight:  'bold',
+      });
+    }
+
+    row.appendChild(rankEl);
+    row.appendChild(nameEl);
+    row.appendChild(barTrack);
+    row.appendChild(scoreEl);
+    row.appendChild(badgeEl);
+    section.appendChild(row);
+  }
+
+  // Footer note
+  if (isModern && upcoming.length > 0) {
+    const hint = document.createElement('div');
+    Object.assign(hint.style, {
+      marginTop:  '7px',
+      color:      '#464e58',
+      fontSize:   '9px',
+      lineHeight: '1.4',
+    });
+    const next = upcoming[0];
+    hint.textContent = `×${next.multiplier} badge = projected to lead by ${next.multiplier}× 2nd-place at ~${next.agePoints} age pts ⚠️ timing est.`;
+    section.appendChild(hint);
+  }
+
+  // Attach to the wrapper the panel renders into.
+  // The panel creates: <div class="advisor-panal_wrapper">…</div>
+  // Note: "panal" is a typo in the original source — match it exactly.
+  const wrapper = panelEl.querySelector('.advisor-panal_wrapper') ?? panelEl;
+  wrapper.appendChild(section);
+
+  vfLog('injected', { classType, players: sorted.length, agePoints, isModern });
+}
+
+// ── CONTROLLER ─────────────────────────────────────────────────────
 
 class VFController {
   static _instance = null;
-
-  _button       = null;
-  _popup        = null;
-  _injectTries  = 0;
-  _outsideClick = null;
+  _observer = null;
 
   constructor() {
     engine.whenReady.then(() => this._onReady());
   }
 
   static getInstance() {
-    if (!VFController._instance) {
-      VFController._instance = new VFController();
-    }
+    if (!VFController._instance) VFController._instance = new VFController();
     return VFController._instance;
   }
 
   _onReady() {
-    vfLog('controller ready');
-    this._scheduleInjection();
+    vfLog('ready');
+    this._setupMutationObserver();
+    // Catch any panels already in the DOM.
+    document.querySelectorAll('panel-advisor-victory').forEach(el => this._schedule(el));
+    // Chain onto the model's update callback after the panel module has set it up.
+    setTimeout(() => this._chainModelUpdate(), MODEL_UPDATE_CHAIN_DELAY);
   }
 
-  // ── AGE PROGRESS ────────────────────────────────────────────────
-
-  _getCurrentAgeType() {
-    try {
-      return GameInfo?.Ages?.lookup(Game.age)?.AgeType ?? null;
-    } catch { return null; }
-  }
-
-  // Current cumulative age-progression points.
-  _getAgePoints() {
-    try {
-      const mgr = Game.AgeProgressManager;
-      if (!mgr) return null;
-      // Try every property name the engine might use.
-      for (const k of ['currentPoints', 'getCurrentPoints', 'totalProgressPoints', 'progressPoints', 'points']) {
-        const v = typeof mgr[k] === 'function' ? mgr[k]() : mgr[k];
-        if (typeof v === 'number' && isFinite(v)) return v;
-      }
-    } catch { /* fall through */ }
-    // Last resort: current turn number (1 turn ≈ 1 age point).
-    try {
-      const t = Game.turn;
-      if (typeof t === 'number') return t;
-    } catch { /* ignore */ }
-    return null;
-  }
-
-  // Maximum age-progression points for the current game speed.
-  _getMaxAgePoints() {
-    try {
-      const ageType = this._getCurrentAgeType();
-      const row = GameInfo?.AgeProgressions?.find(r => r.AgeType === ageType);
-      if (row) {
-        // Try to infer game speed from known speed names.
-        const speedName = Configuration?.getGame?.()?.gameSpeed ?? '';
-        if (/long/i.test(speedName))        return row.MaxPoints_Long        ?? MAX_AGE_POINTS_DEFAULT;
-        if (/abbrev|quick/i.test(speedName)) return row.MaxPoints_Abbreviated ?? MAX_AGE_POINTS_DEFAULT;
-        return row.MaxPoints_Standard ?? MAX_AGE_POINTS_DEFAULT;
-      }
-    } catch { /* ignore */ }
-    return MAX_AGE_POINTS_DEFAULT;
-  }
-
-  // ── SCORE DATA ──────────────────────────────────────────────────
-
-  // Returns Map<victoryLabel, Array<{pid, score, isLocal}>>
-  // where pid may be null if the engine does not expose it.
-  _readAllScores() {
-    try {
-      const raw = VictoryManager?.processedVictoryData;
-      if (!raw) { vfLog('VictoryManager.processedVictoryData unavailable'); return null; }
-
-      const ageHash = Game.age;
-      let ageData = typeof raw.get === 'function' ? raw.get(ageHash) : null;
-
-      if (!ageData) {
-        // Dump available keys to aid debugging.
-        if (typeof raw.entries === 'function') {
-          for (const [k, v] of raw.entries()) {
-            vfLog('processedVictoryData key', { key: String(k), numEntries: v?.length });
-          }
-        }
-        vfLog('no ageData for current age hash', { ageHash: String(ageHash) });
-        return null;
-      }
-
-      const result = new Map();
-
-      for (const vc of ageData) {
-        const ct = vc.ClassType ?? vc.classType ?? '';
-        // Match against known victory type keys.
-        for (const [label, keys] of Object.entries(CLASS_KEYS)) {
-          if (!keys.includes(ct)) continue;
-          const players = [];
-          for (const p of (vc.playerData ?? [])) {
-            players.push({
-              pid:     p.playerId  ?? p.playerID  ?? p.id  ?? p.ID  ?? null,
-              score:   p.currentScore ?? p.CurrentScore ?? 0,
-              maxScore:p.maxScore    ?? p.MaxScore    ?? 0,
-              isLocal: p.isLocalPlayer ?? false,
-            });
-          }
-          result.set(label, players);
-          vfLog(`read ${label}`, { ct, count: players.length });
-          break;
-        }
-      }
-
-      return result.size > 0 ? result : null;
-    } catch (e) {
-      vfLog('error reading scores', { err: String(e) });
-      return null;
-    }
-  }
-
-  _getPlayerName(pid) {
-    if (pid == null) return '(unknown)';
-    try {
-      const p = Players.get(pid);
-      if (!p) return `Player ${pid}`;
-      return p.name ?? p.Name ?? p.leaderName ?? p.civName ?? `Player ${pid}`;
-    } catch { return `Player ${pid}`; }
-  }
-
-  // ── THRESHOLD LOGIC ─────────────────────────────────────────────
-
-  _activeThreshold(agePoints) {
-    let active = MODERN_THRESHOLDS[0];
-    for (const t of MODERN_THRESHOLDS) {
-      if (t.agePoints <= agePoints) active = t;
-    }
-    return active;
-  }
-
-  _upcomingThresholds(agePoints) {
-    return MODERN_THRESHOLDS.filter(t => t.agePoints > agePoints);
-  }
-
-  // Check whether `player` will meet any of the next 2 threshold lowerings.
-  // For dominance types: projected score >= multiplier × projected 2nd-place score.
-  // Returns { onTrack, multiplier, atAgePoints } | { onTrack: false }.
-  _dominanceOnTrack(player, allPlayers, agePoints) {
-    if (agePoints <= 0 || player.score <= 0) return { onTrack: false };
-
-    const myRate = player.score / agePoints;
-
-    const others = allPlayers.filter(p => p !== player);
-
-    for (const t of this._upcomingThresholds(agePoints).slice(0, 2)) {
-      const ahead = t.agePoints - agePoints;
-      const myProj = player.score + myRate * ahead;
-
-      // Project each other player's score (assume same linear rate).
-      const otherProj = others.map(p => {
-        const r = agePoints > 0 ? p.score / agePoints : 0;
-        return p.score + r * ahead;
-      });
-      const secondProj = otherProj.length > 0 ? Math.max(...otherProj) : 0;
-
-      if (myProj >= t.multiplier * Math.max(secondProj, 1)) {
-        return { onTrack: true, multiplier: t.multiplier, atAgePoints: t.agePoints, projScore: Math.round(myProj) };
-      }
-    }
-    return { onTrack: false };
-  }
-
-  // Science: will this player reach the innovation target before the age ends?
-  _scienceOnTrack(player, agePoints, maxAgePoints) {
-    if (player.score >= SCIENCE_INNOVATION_TARGET) {
-      return { onTrack: true, alreadyMet: true };
-    }
-    if (agePoints <= 0) return { onTrack: false };
-    const rate = player.score / agePoints;
-    if (rate <= 0) return { onTrack: false };
-    const projAtEnd = player.score + rate * (maxAgePoints - agePoints);
-    return {
-      onTrack:  projAtEnd >= SCIENCE_INNOVATION_TARGET,
-      projAtEnd: Math.round(projAtEnd),
-    };
-  }
-
-  // ── FORECAST ────────────────────────────────────────────────────
-
-  _computeForecast() {
-    const ageType   = this._getCurrentAgeType();
-    const agePoints = this._getAgePoints() ?? 0;
-    const maxPts    = this._getMaxAgePoints();
-    const isModern  = ageType === MODERN_AGE_TYPE;
-    const allScores = this._readAllScores();
-
-    const active   = this._activeThreshold(agePoints);
-    const upcoming = this._upcomingThresholds(agePoints);
-
-    // Build per-player result rows.
-    // players: Map<rowKey, { name, isLocal, vtResults: Map<label, result> }>
-    const players = new Map();
-
-    const addPlayer = (pid, isLocal, label, vtResult, score) => {
-      const key = pid != null ? String(pid) : (isLocal ? '__local__' : `__rank_${score}`);
-      if (!players.has(key)) {
-        players.set(key, {
-          name:    isLocal ? (this._getPlayerName(pid) + ' ★') : this._getPlayerName(pid),
-          isLocal,
-          vtResults: new Map(),
-        });
-      }
-      players.get(key).vtResults.set(label, vtResult);
-    };
-
-    if (allScores) {
-      for (const [label, pList] of allScores) {
-        const sorted = [...pList].sort((a, b) => b.score - a.score);
-        for (let rank = 0; rank < sorted.length; rank++) {
-          const p = sorted[rank];
-          let result;
-          if (label === 'Science') {
-            result = isModern
-              ? { rank: rank + 1, score: p.score, ...this._scienceOnTrack(p, agePoints, maxPts) }
-              : { rank: rank + 1, score: p.score, onTrack: false };
+  _setupMutationObserver() {
+    this._observer = new MutationObserver(mutations => {
+      for (const mut of mutations) {
+        for (const node of mut.addedNodes) {
+          if (node.nodeType !== Node.ELEMENT_NODE) continue;
+          if (node.tagName?.toLowerCase() === 'panel-advisor-victory') {
+            this._schedule(node);
           } else {
-            result = isModern
-              ? { rank: rank + 1, score: p.score, ...this._dominanceOnTrack(p, sorted, agePoints) }
-              : { rank: rank + 1, score: p.score, onTrack: false };
+            node.querySelectorAll?.('panel-advisor-victory')
+              .forEach(el => this._schedule(el));
           }
-          addPlayer(p.pid, p.isLocal, label, result, p.score);
         }
       }
-    }
-
-    return { ageType, isModern, agePoints, maxPts, active, upcoming, players, hasData: allScores != null };
-  }
-
-  // ── POPUP RENDERING ─────────────────────────────────────────────
-
-  _renderBody(fc) {
-    if (!fc.hasData) {
-      return `
-        <div style="color:#f08080;font-size:12px;margin-top:8px;">
-          ⚠ Could not read victory data from the game API.<br>
-          Open the browser console and search for <code>[TOT-VF]</code> to see debug info.
-        </div>`;
-    }
-
-    if (fc.players.size === 0) {
-      return `<div style="color:#f6d56e;font-size:12px;margin-top:8px;">
-        No player data found yet — try opening the Victory Progress screen first,
-        or wait until the Modern age begins.
-      </div>`;
-    }
-
-    const labels = Object.keys(CLASS_KEYS);
-    const next  = fc.upcoming[0];
-    const next2 = fc.upcoming[1];
-
-    const ageInfo = fc.isModern
-      ? `Current threshold: <b>${fc.active.multiplier}×</b> 2nd-place score
-         ${next  ? ` → <b>${next.multiplier}×</b> at ${next.agePoints} pts` : ''}
-         ${next2 ? ` → <b>${next2.multiplier}×</b> at ${next2.agePoints} pts` : ''}`
-      : `⚠ Not in Modern Age — Modern thresholds shown for reference only`;
-
-    // Table styles
-    const ths = 'padding:4px 8px;text-align:left;border-bottom:1px solid rgba(255,255,255,0.15);color:#8fa0b0;font-weight:normal;font-size:10px;white-space:nowrap;';
-    const tds = 'padding:4px 8px;border-bottom:1px solid rgba(255,255,255,0.06);vertical-align:middle;font-size:11px;';
-    const tdOnTrack = tds + 'background:rgba(40,110,50,0.3);';
-    const badge = 'display:inline-block;margin-left:5px;padding:1px 5px;background:#1e5c28;color:#7dff88;font-size:9px;font-weight:bold;border-radius:3px;border:1px solid #3a9a48;white-space:nowrap;';
-
-    const headerCols = labels.map(l => `<th style="${ths}">${l}</th>`).join('');
-    const rows = [];
-
-    for (const [, entry] of fc.players) {
-      const nameTd = `<td style="${tds + (entry.isLocal ? 'color:#f6d56e;font-weight:bold;' : '')}">${entry.name}</td>`;
-      const cols = labels.map(label => {
-        const vt = entry.vtResults.get(label);
-        if (!vt) return `<td style="${tds}">—</td>`;
-        const rankStr  = vt.rank === 1 ? '🥇' : `#${vt.rank}`;
-        const scoreStr = vt.score != null ? Math.round(vt.score) : '?';
-        const onTrackBadge = vt.onTrack
-          ? `<span style="${badge}">ON TRACK${vt.multiplier ? ` ×${vt.multiplier}` : ''}</span>`
-          : '';
-        return `<td style="${vt.onTrack ? tdOnTrack : tds}">
-          <span style="font-size:9px;color:#6a7a8a;">${rankStr}</span>
-          <span style="margin-left:4px;">${scoreStr}</span>
-          ${onTrackBadge}
-        </td>`;
-      }).join('');
-      rows.push(`<tr>${nameTd}${cols}</tr>`);
-    }
-
-    const legend = next
-      ? `"ON TRACK ×M" = this player's score trajectory will meet the ×M threshold lowering
-         (i.e. they'll be ≥ M × 2nd-place at ~${next.agePoints} pts${next2 ? ` or ~${next2.agePoints} pts` : ''}).
-         Score rates estimated as current-score ÷ age-points-elapsed (linear projection).`
-      : 'No upcoming threshold changes — Modern age is in its final phase.';
-
-    return `
-      <div style="color:#b8c4d0;font-size:11px;margin-bottom:10px;">${ageInfo}</div>
-      <table style="width:100%;border-collapse:collapse;">
-        <thead><tr>
-          <th style="${ths}">Player</th>${headerCols}
-        </tr></thead>
-        <tbody>${rows.join('')}</tbody>
-      </table>
-      <div style="color:#505a64;font-size:10px;margin-top:10px;line-height:1.4;">${legend}</div>
-    `;
-  }
-
-  _refreshPopup() {
-    const popup = this._popup;
-    if (!popup || popup.style.display === 'none') return;
-    const fc = this._computeForecast();
-    const body = popup.querySelector('#vf-popup-body');
-    if (body) body.innerHTML = this._renderBody(fc);
-    const sub = popup.querySelector('#vf-popup-sub');
-    if (sub) sub.textContent =
-      `${MOD_VERSION_LABEL} · Age: ${fc.ageType ?? '?'} · ${fc.agePoints}/${fc.maxPts} pts`;
-  }
-
-  // ── POPUP LIFECYCLE ─────────────────────────────────────────────
-
-  _ensurePopup() {
-    if (this._popup && document.body?.contains(this._popup)) return this._popup;
-
-    const popup = document.createElement('div');
-    popup.id = VF_POPUP_ID;
-    Object.assign(popup.style, {
-      position:        'fixed',
-      top:             '56px',
-      right:           '20px',
-      zIndex:          '99999',
-      display:         'none',
-      minWidth:        '520px',
-      maxWidth:        '700px',
-      maxHeight:       '72vh',
-      overflowY:       'auto',
-      padding:         '14px 16px',
-      border:          '1px solid rgba(246,213,110,0.55)',
-      borderRadius:    '8px',
-      background:      'rgba(5,10,18,0.97)',
-      color:           '#ffffff',
-      fontFamily:      'Arial, sans-serif',
-      fontSize:        '13px',
-      lineHeight:      '1.45',
-      boxShadow:       '0 4px 18px rgba(0,0,0,0.65)',
-      pointerEvents:   'auto',
     });
+    this._observer.observe(document.body, { childList: true, subtree: true });
+  }
 
-    const fc = this._computeForecast();
-    popup.innerHTML = `
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
-        <div style="font-size:15px;font-weight:bold;color:#f6d56e;">${MOD_DISPLAY_NAME}</div>
-        <div id="vf-popup-close" role="button" aria-label="Close"
-             style="cursor:pointer;color:#bbb;font-size:16px;line-height:1;padding:2px 8px;">&#x2715;</div>
-      </div>
-      <div id="vf-popup-sub" style="color:#b8c4d0;font-size:11px;margin-bottom:10px;">
-        ${MOD_VERSION_LABEL} · Age: ${fc.ageType ?? '?'} · ${fc.agePoints}/${fc.maxPts} pts
-      </div>
-      <div id="vf-popup-body">${this._renderBody(fc)}</div>
-    `;
+  // Debounce and defer injection until the panel has finished rendering.
+  _schedule(el) {
+    const now = Date.now();
+    if (now - (el._vfStamp ?? 0) < 150) return;
+    el._vfStamp = now;
+    requestAnimationFrame(() => {
+      try { injectForecast(el); } catch (e) { vfLog('inject error', { err: String(e) }); }
+    });
+  }
 
-    document.body.appendChild(popup);
-    this._popup = popup;
+  // Chain our refresh onto the AdvisorProgressModel's update callback so that
+  // forecast strips update whenever VictoryManager pushes new data.
+  _chainModelUpdate() {
+    try {
+      const model = window.g_AdvisorProgressModel;
+      if (!model) { vfLog('g_AdvisorProgressModel not found — live updates disabled'); return; }
 
-    // Close button
-    const closeBtn = popup.querySelector('#vf-popup-close');
-    if (closeBtn) {
-      const doClose = ev => { ev.stopPropagation(); this._setVisible(false); };
-      closeBtn.addEventListener('click',      doClose);
-      closeBtn.addEventListener('pointerdown', doClose);
-    }
-
-    // Outside-click dismissal
-    if (!this._outsideClick) {
-      this._outsideClick = ev => {
-        if (!this._popup || this._popup.style.display === 'none') return;
-        if (this._popup.contains(ev.target)) return;
-        if (this._button?.contains(ev.target)) return;
-        this._setVisible(false);
+      const orig = model.onUpdate;
+      model.onUpdate = m => {
+        if (typeof orig === 'function') orig(m);
+        // Brief delay so the model's victoryData is committed before we re-read.
+        setTimeout(() => {
+          document.querySelectorAll('panel-advisor-victory')
+            .forEach(el => { try { injectForecast(el); } catch { /* ignore */ } });
+        }, 80);
       };
-      document.addEventListener('click', this._outsideClick, true);
+      vfLog('chained onto g_AdvisorProgressModel.onUpdate');
+    } catch (e) {
+      vfLog('could not chain model update', { err: String(e) });
     }
-
-    return popup;
-  }
-
-  _setVisible(visible) {
-    const popup = this._ensurePopup();
-    popup.style.display = visible ? 'block' : 'none';
-    if (visible) this._refreshPopup();
-  }
-
-  _togglePopup() {
-    const popup = this._ensurePopup();
-    this._setVisible(popup.style.display === 'none');
-  }
-
-  // ── BUTTON INJECTION ────────────────────────────────────────────
-
-  _scheduleInjection() {
-    const tryInject = () => {
-      if (this._button && document.body?.contains(this._button)) return;
-
-      // Preferred anchor: turn-number parent (same as zoom mod).
-      const turnEl = document.querySelector('.ps-turn-number, [class*="turn-number"]');
-      if (turnEl?.parentElement) {
-        this._injectButton(turnEl.parentElement, turnEl);
-        return;
-      }
-
-      // Fallback: ps-icons group.
-      const icons = document.querySelector(TOP_BAR_ANCHOR);
-      if (icons) {
-        this._injectButton(icons, icons.firstChild);
-        return;
-      }
-
-      this._injectTries++;
-      if (this._injectTries >= INJECT_MAX_TRIES) {
-        if (document.body) {
-          const btn = this._buildButton(true);
-          document.body.appendChild(btn);
-          this._button = btn;
-          vfLog('button injected (full fallback)');
-        }
-        return;
-      }
-      setTimeout(tryInject, INJECT_INTERVAL);
-    };
-    tryInject();
-  }
-
-  _injectButton(anchor, insertBefore) {
-    if (this._button && document.body?.contains(this._button)) return;
-    const btn = this._buildButton(false);
-    if (insertBefore && anchor.contains(insertBefore)) {
-      anchor.insertBefore(btn, insertBefore);
-    } else {
-      anchor.appendChild(btn);
-    }
-    this._button = btn;
-    vfLog('button injected');
-  }
-
-  _buildButton(isFallback) {
-    const btn = document.createElement('div');
-    btn.id = VF_BUTTON_ID;
-    btn.setAttribute('role', 'button');
-    btn.setAttribute('aria-label', `${MOD_DISPLAY_NAME} — victory track forecast`);
-    btn.title = `${MOD_DISPLAY_NAME} — who's on victory track?`;
-    btn.textContent = 'VF';
-
-    Object.assign(btn.style, {
-      cursor:          'pointer',
-      userSelect:      'none',
-      pointerEvents:   'auto',
-      display:         'inline-block',
-      alignSelf:       'center',
-      boxSizing:       'border-box',
-      width:           '38px',
-      height:          '26px',
-      padding:         '0',
-      marginRight:     '14px',
-      border:          '1px solid rgba(200,210,220,0.35)',
-      borderRadius:    '4px',
-      background:      'rgba(10,18,30,0.45)',
-      color:           '#c8ced4',
-      fontFamily:      'Arial, sans-serif',
-      fontSize:        '12px',
-      fontWeight:      'bold',
-      letterSpacing:   '0.5px',
-      lineHeight:      '24px',
-      textAlign:       'center',
-      verticalAlign:   'middle',
-    });
-
-    if (isFallback) {
-      Object.assign(btn.style, {
-        position: 'fixed',
-        top:      '12px',
-        left:     '200px',
-        zIndex:   '9998',
-      });
-    }
-
-    btn.addEventListener('mouseenter', () => {
-      btn.style.background   = 'rgba(40,60,90,0.75)';
-      btn.style.color        = '#ffffff';
-      btn.style.borderColor  = 'rgba(255,255,255,0.55)';
-    });
-    btn.addEventListener('mouseleave', () => {
-      btn.style.background   = 'rgba(10,18,30,0.45)';
-      btn.style.color        = '#c8ced4';
-      btn.style.borderColor  = 'rgba(200,210,220,0.35)';
-    });
-    btn.addEventListener('click', ev => {
-      ev.stopPropagation();
-      this._togglePopup();
-    });
-
-    return btn;
   }
 }
 
-// ── BOOT ───────────────────────────────────────────────────────────
-
-const VictoryForecaster = VFController.getInstance();
-export { VictoryForecaster as default };
+VFController.getInstance();
 
 //# sourceMappingURL=victory-forecaster.js.map
