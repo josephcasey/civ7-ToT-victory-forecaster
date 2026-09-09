@@ -37,7 +37,8 @@
 // gaining enough to push the goal up.
 // ─────────────────────────────────────────────────────────────────────────────────────────
 
-const VF_TAG = '[TOT-VF]';
+const VF_TAG         = '[TOT-VF]';
+const VF_BLOCK_CLASS = 'vf-forecast';
 
 // Victory types, and the per-card CSS class the SolidJS summary tab puts on each column.
 const VICTORY_DEFS = [
@@ -355,7 +356,7 @@ function buildDominanceBlock(victoryType, agePct) {
   const board = leaderboard(victoryType);
   if (board.length < 2) return null;
 
-  const box = el('div', 'vf-forecast');
+  const box = el('div', VF_BLOCK_CLASS);
 
   if (!upcoming.length) {
     box.appendChild(el('div', 'vf-head', 'Final tier reached'));
@@ -420,7 +421,7 @@ function buildScienceBlock() {
   const board = leaderboard(SCIENCE_TYPE);
   if (!board.length) return null;
 
-  const box = el('div', 'vf-forecast');
+  const box = el('div', VF_BLOCK_CLASS);
   box.appendChild(el('div', 'vf-head', `Forecast — race to ${SCIENCE_INNOVATION_GOAL} innovation`));
 
   const contenders = forecastScience(board).slice(0, 3);
@@ -475,8 +476,13 @@ function injectInto(card) {
     : buildDominanceBlock(victoryType, agePct);
   if (!block) return false;
 
-  const existing = card.querySelector(':scope > .vf-forecast');
-  if (existing) existing.replaceWith(block);
+  // Coherent GT is not a full modern browser: `:scope` selectors and Element.replaceWith
+  // are not dependable across builds. Scan direct children and swap manually instead.
+  let existing = null;
+  for (const child of Array.from(card.children || [])) {
+    if (child.classList?.contains(VF_BLOCK_CLASS)) { existing = child; break; }
+  }
+  if (existing) card.replaceChild(block, existing);
   else card.appendChild(block);
   return true;
 }
