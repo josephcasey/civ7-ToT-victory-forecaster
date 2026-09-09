@@ -98,6 +98,7 @@ text/en_us/InGameText.xml                     — in-game strings
 scripts/install.sh                            — symlink installer (macOS)
 scripts/view_logs.sh                          — stream [TOT-VF] console output
 scripts/upload_workshop.sh                    — steamcmd Workshop upload
+docs/HANDOFF.md                               — confidence table + verification steps
 ```
 
 `UIScripts` is required rather than `ImportFiles`: this mod **adds** a script rather than
@@ -125,6 +126,12 @@ Enable **ToT Victory Forecaster [Local Dev]** in Additional Content, then restar
    That line confirms every assumption in one go — if the forecast looks wrong, it says why.
 4. Cross-check one column by hand: hover the card for the game's own tooltip and confirm the
    mod's "next tier" multiplier and percentage match the tooltip's `Next:` line.
+
+## Status
+
+This mod has **not yet been run in-game**. See [`docs/HANDOFF.md`](docs/HANDOFF.md) for
+what is confirmed vs inferred, how to validate against your local Civ7 install, and how to
+read the startup diagnostics line.
 
 ## Roadmap
 
