@@ -6,6 +6,6 @@
 	"previewfile"		""
 	"visibility"		"0"
 	"title"			"ToT Victory Forecaster"
-	"description"		"Automatically flags players ON TRACK to meet the next Test of Time threshold lowering in the Modern age. Augments the victory screen with per-player score rankings and ON TRACK badges — no user interaction required."
+	"description"		"Augments the in-game Victories screen with a forecast strip under each victory card, naming the civ projected to cross the threshold when the Point Goal next drops. Reads the victory tier ladder live from the game database. No buttons, no user interaction."
 	"changenote"		"Initial release"
 }

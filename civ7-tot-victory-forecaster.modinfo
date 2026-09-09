@@ -1,30 +1,62 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Mod id="civ7-tot-victory-forecaster-local" version="1">
-	<Properties>
-		<Name>LOC_MOD_TOT_VF_NAME</Name>
-		<Description>LOC_MOD_TOT_VF_DESCRIPTION</Description>
-		<Authors>josephcasey</Authors>
-	</Properties>
-	<Dependencies>
-		<Mod id="base-standard" title="LOC_MODULE_BASE_STANDARD_NAME"/>
-	</Dependencies>
-	<ActionGroups>
-		<!-- Shell scope: mod-browser display text -->
-		<ActionGroup id="vf-shell" scope="shell" criteria="always" loadOrder="1000">
-			<Actions>
-				<ImportFiles>
-					<Item>text/en_us/ModInfoText.xml</Item>
-				</ImportFiles>
-			</Actions>
-		</ActionGroup>
-		<!-- Game scope: main JS + in-game text -->
-		<ActionGroup id="vf-game" scope="game" criteria="always" loadOrder="1000">
-			<Actions>
-				<ImportFiles>
-					<Item>ui/victory-forecaster/victory-forecaster.js</Item>
-					<Item>text/en_us/InGameText.xml</Item>
-				</ImportFiles>
-			</Actions>
-		</ActionGroup>
-	</ActionGroups>
+
+<Mod id="civ7-tot-victory-forecaster-local" version="1" xmlns="ModInfo">
+  <Properties>
+    <Name>LOC_MOD_TOT_VF_NAME</Name>
+    <Description>LOC_MOD_TOT_VF_DESCRIPTION</Description>
+    <Authors>josephcasey</Authors>
+    <ShowInBrowser>1</ShowInBrowser>
+    <Package>CommunityMod</Package>
+    <PackageSortIndex>1000</PackageSortIndex>
+  </Properties>
+
+  <Dependencies>
+    <Mod id="base-standard" title="Standard Rules" />
+  </Dependencies>
+
+  <References></References>
+
+  <ActionCriteria>
+    <Criteria id="always">
+      <AlwaysMet />
+    </Criteria>
+  </ActionCriteria>
+
+  <ActionGroups>
+    <!-- Shell scope: mod browser name/description -->
+    <ActionGroup id="vf-local-shell" scope="shell" criteria="always">
+      <Properties>
+        <LoadOrder>1000</LoadOrder>
+      </Properties>
+      <Actions>
+        <UpdateText>
+          <Item>text/en_us/ModInfoText.xml</Item>
+        </UpdateText>
+      </Actions>
+    </ActionGroup>
+
+    <!-- Game scope: additive UI script that augments the victories screen.
+         UIScripts (not ImportFiles) is required: we are ADDING a new script,
+         not overriding an existing base-game file. -->
+    <ActionGroup id="vf-local-game" scope="game" criteria="always">
+      <Properties>
+        <LoadOrder>1000</LoadOrder>
+      </Properties>
+      <Actions>
+        <UpdateText>
+          <Item>text/en_us/ModInfoText.xml</Item>
+          <Item>text/en_us/InGameText.xml</Item>
+        </UpdateText>
+        <UIScripts>
+          <Item>ui/victory-forecaster/victory-forecaster.js</Item>
+        </UIScripts>
+      </Actions>
+    </ActionGroup>
+  </ActionGroups>
+
+  <LocalizedText>
+    <Text>
+      <Item>text/en_us/ModInfoText.xml</Item>
+    </Text>
+  </LocalizedText>
 </Mod>

@@ -1,8 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Database>
-	<LocalizedText>
-		<Row Tag="LOC_TOT_VF_BUTTON_TOOLTIP" Language="en_US">
-			<Text>Victory Forecaster — see who is on track to meet the next ToT threshold lowering</Text>
-		</Row>
-	</LocalizedText>
+  <EnglishText>
+    <Row Tag="LOC_TOT_VF_FORECAST_HEADING">
+      <Text>Forecast — next point goal drops</Text>
+    </Row>
+    <Row Tag="LOC_TOT_VF_ON_TRACK">
+      <Text>ON TRACK</Text>
+    </Row>
+  </EnglishText>
 </Database>
