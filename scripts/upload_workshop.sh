@@ -1,26 +1,30 @@
 #!/bin/bash
 # Publish / update the mod on the Steam Workshop.
 #
-# Runs workshop_build_item TWICE, because Steam does not reliably accept content
-# and a preview image in the same call:
+# Uploads the staged mod payload. The PREVIEW IMAGE CANNOT BE UPLOADED for this
+# app and must be set by hand on the item's Edit page - proven, with the item
+# created on 2026-09-15:
 #
-#   1. content  - the staged mod payload, title, description, visibility
-#   2. preview  - a minimal VDF carrying only appid + publishedfileid +
-#                 previewfile. `contentfolder` is optional in
-#                 workshop_build_item and omitting it leaves the uploaded files
-#                 untouched, so this cannot clobber step 1.
+#   Uploading preview image...clientugc.cpp (2069) :
+#       k_EPublishedFileStorageSystemLegacyCloud == eStorage
+#   ERROR! Failed to update workshop item (Access Denied).
 #
-# Two things that make preview upload fail silently, both handled here:
-#   - a preview over 1 MB is rejected without an error
-#   - the preview must live OUTSIDE the content folder, so it is kept at the
-#     repo root while content is staged under build/steam/content/
+# That is an assertion inside Steam's own client: its preview-upload path only
+# supports items held in LEGACY CLOUD storage, and Civ VII items use the newer
+# UGC storage. So it fails regardless of image size, path, or VDF shape. Nothing
+# in this script can work around it.
+#
+# `--try-preview` keeps the attempt available in case Valve ever fixes it. It
+# runs a second workshop_build_item with a minimal VDF (appid + publishedfileid +
+# previewfile only); `contentfolder` is optional and omitting it leaves the
+# uploaded files untouched, so a retry cannot clobber the content.
 #
 # steamcmd cannot be driven from a non-TTY shell, so login goes through the
 # expect wrapper, which reads the password from the macOS Keychain (never
 # printed) and surfaces Steam Guard in a dialog.
 #
 # Usage:
-#   ./scripts/upload_workshop.sh [--changenote "text"] [--content-only|--preview-only]
+#   ./scripts/upload_workshop.sh [--changenote "text"] [--try-preview|--preview-only]
 set -euo pipefail
 
 STEAM_LOGIN="${STEAM_LOGIN:-josephcasey}"
@@ -36,12 +40,12 @@ GEN="$ROOT/scripts/build_workshop_vdf.py"
 
 CHANGENOTE=""
 DO_CONTENT=1
-DO_PREVIEW=1
+DO_PREVIEW=0   # see the note above: impossible for this app
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--changenote)   CHANGENOTE="$2"; shift 2 ;;
-		--content-only) DO_PREVIEW=0; shift ;;
-		--preview-only) DO_CONTENT=0; shift ;;
+		--try-preview)  DO_PREVIEW=1; shift ;;
+		--preview-only) DO_CONTENT=0; DO_PREVIEW=1; shift ;;
 		*) echo "unknown argument: $1" >&2; exit 1 ;;
 	esac
 done
@@ -115,11 +119,20 @@ if [ "$DO_PREVIEW" = "1" ]; then
 	set -e
 	if [ "$rc" != "0" ]; then
 		echo "" >&2
-		echo "!! Preview upload failed (exit $rc). The content upload above still succeeded." >&2
-		echo "   Set the image manually on the item's Edit page: preview.png at the repo root." >&2
-		exit "$rc"
+		echo "!! Preview upload failed (exit $rc), as expected for this app." >&2
+		echo "   Check $BUILD/preview.log for 'LegacyCloud == eStorage' to confirm it is" >&2
+		echo "   the storage-system limitation and not something new." >&2
+		echo "   Content upload above still succeeded." >&2
 	fi
 fi
 
+ID="$(current_id)"
 echo ""
-echo "Done. Item: https://steamcommunity.com/sharedfiles/filedetails/?id=$(current_id)"
+echo "Done. Item: https://steamcommunity.com/sharedfiles/filedetails/?id=$ID"
+if [ "$DO_PREVIEW" = "0" ]; then
+	echo ""
+	echo "PREVIEW IMAGE: set it by hand - steamcmd cannot upload it for this app."
+	echo "  1. open https://steamcommunity.com/sharedfiles/itemedittext/?id=$ID"
+	echo "  2. upload $PREVIEW"
+	echo "It only has to be done when the image changes, not on every content update."
+fi

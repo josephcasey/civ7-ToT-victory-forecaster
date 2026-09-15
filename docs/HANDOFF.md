@@ -56,41 +56,51 @@ injection. A card only exists in the DOM when the victory is already enabled, so
 could only ever produce false negatives. It survives in the diagnostics line, where a wrong
 value is harmless.
 
-## Steam Workshop publishing — the preview image (2026-09-15)
+## Steam Workshop publishing (2026-09-15)
 
-The previous session recorded, in this repo and in the sibling connected-settlements repo,
-that *“preview images can't be uploaded via steamcmd for this app”*. That is **not a hard
-limit** — the working Civ VII upload simply omitted `previewfile` entirely and the image was
-set by hand afterwards.
+Published as item **3802048371**, visibility 2 (private). `workshop.vdf` now carries that id,
+so further runs update it rather than creating a second item.
 
-Researched and rebuilt as a **two-step upload**, which is the pattern Steam's own community
-guide for custom thumbnails describes:
+### The preview image genuinely cannot be uploaded by steamcmd — now proven
 
-1. **content** — `appid`, `publishedfileid`, `contentfolder`, `visibility`, `title`,
-   `description`, `changenote`. No `previewfile`.
-2. **preview** — a minimal VDF with only `appid`, `publishedfileid`, `previewfile`.
+The earlier note in this repo said preview images *“can't be uploaded via steamcmd for this
+app (newer UGC storage, not legacy cloud)”*. I researched that, concluded it was probably a
+fixable misconfiguration, rebuilt the upload as two calls, and **was wrong**. The first publish
+produced the actual error:
 
-The key fact that makes step 2 safe: **`contentfolder` is optional** in `workshop_build_item`,
-and omitting it leaves the item's already-uploaded files untouched. So the preview call cannot
-clobber the content call.
+```
+Uploading preview image...clientugc.cpp (2069) :
+    k_EPublishedFileStorageSystemLegacyCloud == eStorage
+ERROR! Failed to update workshop item (Access Denied).
+```
 
-Two documented causes of a *silent* preview failure, both now refused by
-`scripts/build_workshop_vdf.py` rather than allowed through:
+That is an assertion inside Steam's client. Its preview-upload path only supports items on
+**legacy cloud** storage; Civ VII uses the newer UGC storage, so it fails regardless of image
+size, path, or VDF shape. The original note was correct, and the reason it gave was correct.
+Do not spend time on this again — set the preview on the Edit page:
+`https://steamcommunity.com/sharedfiles/itemedittext/?id=3802048371`
 
-- **Preview over 1 MB** — rejected by Steam with no error. Ours is 47 KB at 640×640.
-- **Preview inside the content folder** — it must sit above it. Content is staged to
-  `build/steam/content/`, so the repo-root `preview.png` is naturally outside.
+What the rework *was* still worth doing for:
 
-Also fixed: the old `upload_workshop.sh` set `contentfolder` to the **repo root**, which would
-have shipped `.git`, `docs/`, `scripts/`, the README *and* the preview image as mod content —
-and put the preview inside the content folder, the very thing that breaks it. Content is now
-staged to a clean directory holding only the modinfo, `ui/` and `text/`.
+- **The old script would have shipped the whole repo.** `contentfolder` was the repo root, so
+  `.git`, `docs/`, `scripts/`, the README and `preview.png` would all have gone up as mod
+  content. Content is now staged to `build/steam/content/` holding only the modinfo, `ui/` and
+  `text/` — verified: the upload contained exactly three files.
+- **Description truncation is now impossible.** A straight `"` becomes `\"` in the VDF and
+  Steam's parser stops there. `build_workshop_vdf.py` refuses to generate such a VDF.
+- **The two-step split is the right shape anyway** — `contentfolder` is optional in
+  `workshop_build_item`, so a preview-only retry cannot clobber the content. `--try-preview`
+  keeps it available if Valve ever fixes the storage-system check.
 
-Unverified until the first real publish: whether step 2 actually takes. If it does not, the
-content upload still succeeds and the script says so, and the fallback is the Edit page.
+### Conventions taken from the sibling mods
 
-Sources: Steam community guide *Uploading custom thumbnails to the Steam Workshop*
-(`steamcommunity.com/sharedfiles/filedetails/?id=2936720761`).
+- Mod id is `jc-<name>` (`jc-tot-victory-forecaster`), not the `-local` suffix it had.
+- `<Authors>` is `childofwight` — the Steam display name. The Steam **login** is `josephcasey`;
+  the Keychain service holding the password is `civ7-steamcmd-upload` (reused across games
+  despite the civ7 name).
+- Note the id is shared by the local dev copy and any subscribed Workshop copy, so subscribing
+  to your own item collides with local dev. Keep the Workshop copy unsubscribed, or move it
+  aside, while developing.
 
 ## Design change — the panel is retired (2026-09-14)
 

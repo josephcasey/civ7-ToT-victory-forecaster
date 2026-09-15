@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 
-<Mod id="civ7-tot-victory-forecaster-local" version="1" xmlns="ModInfo">
+<Mod id="jc-tot-victory-forecaster" version="1" xmlns="ModInfo">
   <Properties>
     <Name>LOC_MOD_TOT_VF_NAME</Name>
     <Description>LOC_MOD_TOT_VF_DESCRIPTION</Description>
-    <Authors>josephcasey</Authors>
+    <Authors>childofwight</Authors>
     <ShowInBrowser>1</ShowInBrowser>
     <Package>CommunityMod</Package>
     <PackageSortIndex>1000</PackageSortIndex>

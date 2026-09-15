@@ -193,39 +193,58 @@ not have to quit Civ7 before running it.
 
 ## Publishing to the Steam Workshop
 
+Workshop item: **[3802048371](https://steamcommunity.com/sharedfiles/filedetails/?id=3802048371)**
+(currently private).
+
 ```bash
 ./scripts/upload_workshop.sh --changenote "what changed"
 ```
 
 `workshop.vdf` is the source of truth for title, description, visibility and the
-`publishedfileid`. The script resolves it into build VDFs; do not edit those by hand.
+`publishedfileid`. The script resolves it into build VDFs under `build/steam/`; do not edit
+those by hand. Only the mod payload is staged — the modinfo, `ui/` and `text/` — because
+pointing `contentfolder` at the repo root would ship `.git`, `docs/`, `scripts/` and the
+README as mod content.
 
-It runs `workshop_build_item` **twice**, because Steam does not reliably accept content and
-a preview image in the same call:
+### The preview image cannot be uploaded by steamcmd
 
-1. **content** — staged payload, title, description, visibility. No `previewfile`.
-2. **preview** — a minimal VDF carrying only `appid`, `publishedfileid`, `previewfile`.
+It has to be set by hand on the item's Edit page. This is **not** a misconfiguration — it is a
+limitation of Steam's client, proven on the first publish:
 
-`contentfolder` is optional in `workshop_build_item`, and omitting it leaves the item's
-existing files untouched — which is what makes the second call safe to run immediately after
-the first. Two things make a preview upload fail *silently*, and the generator refuses rather
-than letting either through:
+```
+Uploading preview image...clientugc.cpp (2069) :
+    k_EPublishedFileStorageSystemLegacyCloud == eStorage
+ERROR! Failed to update workshop item (Access Denied).
+```
 
-- **over 1 MB** — rejected with no error message
-- **inside the content folder** — the preview stays at the repo root while content is staged
-  under `build/steam/content/`
+That assertion says the preview-upload path only supports items held in **legacy cloud**
+storage. Civ VII items use the newer UGC storage, so the upload fails regardless of image
+size, file path, or VDF shape. The two-step upload (content, then a minimal
+`appid`+`publishedfileid`+`previewfile` VDF) is the correct pattern *in general* and works for
+apps on legacy storage — it just cannot work here.
 
-Other traps, all enforced by `build_workshop_vdf.py`:
+So `upload_workshop.sh` does not attempt it by default; it prints the Edit-page URL instead.
+`--try-preview` keeps the attempt available in case Valve ever changes this. Because
+`contentfolder` is optional in `workshop_build_item`, a preview-only retry leaves the uploaded
+files untouched.
+
+To set it: open
+[the edit page](https://steamcommunity.com/sharedfiles/itemedittext/?id=3802048371) and upload
+`preview.png`. Only needed when the image changes, not on every content update.
+
+### Other traps, all enforced by `build_workshop_vdf.py`
 
 - A straight `"` in the description becomes `\"` in the VDF and Steam's parser stops there,
   silently truncating everything after it. Use curly quotes; the generator refuses otherwise.
 - `contentfolder` and `previewfile` must be absolute paths.
-- Only the mod payload is staged — the repo root would ship `.git`, `docs/` and `scripts/`.
+- A preview over 1 MB is rejected silently by Steam (ours is 47 KB at 640×640), and the
+  preview must sit outside the content folder — both still checked, for the day this works.
 
 Login goes through `steamcmd_upload_with_keychain.expect`, since steamcmd needs a real TTY for
 its password prompt. It reads the password from the macOS Keychain (never printing it) and
-surfaces Steam Guard in a dialog. Steam **login** name is `josephcasey`; the Keychain service
-is `civ7-steamcmd-upload`. Civ VII's Workshop app id is `1295660`.
+surfaces Steam Guard in a dialog — with a mobile authenticator you just approve the push.
+Steam **login** name is `josephcasey`; the Keychain service is `civ7-steamcmd-upload`.
+Civ VII's Workshop app id is `1295660`.
 
 ## Status
 
