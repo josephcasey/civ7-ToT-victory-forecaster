@@ -191,6 +191,33 @@ not have to quit Civ7 before running it.
    victory could not be identified from the tooltip text; `tip:noframes` means the
    `Card-Frame` sections were not found. `cards: 0` means the card selector itself is stale.
 
+## Playing on GeForce NOW
+
+**Steam Workshop mods no longer download automatically in a GFN session.** NVIDIA disabled it —
+this is not a problem with this mod, and it affects every Workshop mod equally. From NVIDIA's
+support article (updated 26 Aug 2026):
+
+> Steam Workshop mods are not officially supported on GeForce NOW. […] A recent change from
+> Steam required us to disable the ability in order to ensure supported games are able to run
+> as expected on the cloud.
+
+The symptom is that subscribed items still appear in the in-app Workshop list but show **0 B** —
+the subscription is visible, the content was never fetched.
+
+There is a temporary workaround, enabled for the top 100 Steam games, and it must be repeated
+**every session**:
+
+1. Launch the game from the GeForce NOW app — you land on the game's Steam Library page.
+2. **Sign out of Steam, then sign back in.** To change which mods you use, subscribe or
+   unsubscribe *after* signing back in.
+3. Then press **Play**.
+
+If that does not work, Civ VII may not be on NVIDIA's enabled list; they ask for in-app
+feedback in that case. RUST, DayZ and Project Zomboid are the three they name as unsupported.
+
+Note this mod is currently published **private**, which is an extra variable when testing on
+GFN. Set it to unlisted or public if you need to rule that out.
+
 ## Publishing to the Steam Workshop
 
 Workshop item: **[3802048371](https://steamcommunity.com/sharedfiles/filedetails/?id=3802048371)**

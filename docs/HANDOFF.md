@@ -56,6 +56,39 @@ injection. A card only exists in the DOM when the victory is already enabled, so
 could only ever produce false negatives. It survives in the diagnostics line, where a wrong
 value is harmless.
 
+## GeForce NOW stopped loading Workshop mods (investigated 2026-09-15)
+
+Not a mod bug and not fixable from this repo. NVIDIA disabled in-session Workshop mod
+downloading; the support article *Does GeForce NOW support Steam Workshop mods?* was updated
+**26 Aug 2026** and says a recent change on Steam's side forced it, to keep supported games
+running on the cloud. It affects all Workshop mods, not just ours.
+
+Diagnostic signature: the GFN in-app Workshop list still shows subscribed items, but every one
+reports **0 B**. That is subscriptions visible, content never fetched — exactly what was
+observed for all four of Joseph's mods (ours, City Hall, Enhanced Town Focus Info,
+Leonardfactory's Policy Yield Previews) while the same four showed real sizes locally.
+
+Workaround, per NVIDIA, enabled for the top 100 Steam games and required **every session**:
+launch from the GFN app, land on the game's Steam Library page, **sign out of Steam and back
+in** (subscribe/unsubscribe only *after* signing in), then Play. RUST, DayZ and Project Zomboid
+are named as not supporting even this. If Civ VII is not on the enabled list, NVIDIA asks for
+in-app feedback.
+
+Unresolved: whether Civ VII is actually on that top-100 enabled list. Could not confirm — the
+list is not published.
+
+## Local dev vs subscribed Workshop copy
+
+`install.sh` now re-stamps the installed copy as a **separate mod** from the published item:
+Mod id gains a `-local` suffix and the browser name gains `[Local Dev]`. The published payload
+stays clean. Without this they share a Mod id and collide, and the stale Workshop version can
+win so local edits appear to do nothing.
+
+Worth knowing: because the two ids now differ, both can load at once and the mod runs twice.
+That happens to be harmless — `augmentTooltip` is idempotent via its `.vf-aug` marker and
+`paintScores` just re-sets the same inline style — but disable the Workshop copy while
+developing anyway, so logs are not doubled.
+
 ## Steam Workshop publishing (2026-09-15)
 
 Published as item **3802048371**, visibility 2 (private). `workshop.vdf` now carries that id,
