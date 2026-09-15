@@ -1,25 +1,47 @@
 # ToT Victory Forecaster
 
-A Civilization VII mod that augments the in-game **Victories** screen with a forecast strip
-under each victory card, naming the civ projected to cross the threshold when the Point Goal
-next drops.
+A Civilization VII mod that annotates the in-game **Victories** screen so you can see, at a
+glance, which civ is about to trigger a victory countdown — and why.
 
-No button, no popup, no user interaction. Install it and the screen simply gains extra rows.
+It adds no panel and no button. It augments what the base screen already draws.
 
 ## What it adds
 
-Under each victory column on the Victories screen:
+**1. A red score on the leaderboard.** Any civ whose *current* score already clears the goal
+the **next** tier will set turns red. That civ starts a victory countdown the moment the Point
+Goal drops. Only the leader can ever qualify — the goal is a multiple greater than 1 of
+*second* place, so nobody below first can clear it.
+
+**2. Numbers in the card's hover tooltip.** Each victory-tier section gains the Point Goal that
+tier produces and the arithmetic behind it:
 
 ```
-FORECAST — NEXT POINT GOAL DROPS
-▶ Substantive Victory ×1.5        60% age · ~9t
-✓ Sayyida al Hurra ON TRACK          690 / 459
-· Narrow Victory ×1.25                  80% age
-✓ Sayyida al Hurra ON TRACK          812 / 402
-Projected from recent score rate · 5-turn countdown follows
+MOMENTOUS VICTORY
+Required: 2x the Second Place Player's score before 60% Age Progress
+──────────────────────────────────────────
+Point Goal 612  =  ×2 of 2nd place (Pachacuti 306)
+Sayyida al Hurra leads on 514 — 98 short
+
+NEXT: SUBSTANTIVE VICTORY
+Required: 1.5x the Second Place Player's score before 80% Age Progress
+──────────────────────────────────────────
+Point Goal 459  =  ×1.5 of 2nd place (Pachacuti 306)
+⚠ Sayyida al Hurra (514) already clears this — countdown starts at 60% Age Progress
 ```
 
-For the Scientific column it instead shows the race to 100 Innovation with a per-civ ETA.
+The derivation shows even when no countdown is imminent, because "×1.5" is meaningless without
+knowing which number it multiplies.
+
+**Everything is exact arithmetic over current standings — there is no projection anywhere.**
+The Point Goal falls because the *multiplier* drops, not because anyone's score moves, so
+current scores are the honest input. An earlier revision extrapolated score rates and produced
+figures that contradicted the leaderboard on the same card; that code is gone.
+
+The "in force" section uses the game's own `getCountdownVictoryDominanceScore`, so the mod's
+arithmetic is checked against the number printed at the top of the card on every hover. If
+they ever disagree, the mod is wrong and you will see it.
+
+Civs the local player has not met stay anonymised as **Unmet civ**, matching the base screen.
 
 ## How ToT victories actually work
 
@@ -39,54 +61,77 @@ Standard Antiquity-start campaign, Modern age (`PreviousAgeCount="2"`):
 | ≥ 60% | 50  | 1.50× | Substantive Victory |
 | ≥ 80% | 25  | 1.25× | Narrow Victory |
 
-A Modern-age-only start (`AGE_MODERN`, `PreviousAgeCount="0"`) has just the last three rows,
-and an Exploration-age game has its own set topped by Transcendent Victory at 6×.
+A Modern-age-only start (`AGE_MODERN`, `PreviousAgeCount="0"`) has just the last three rows.
+An Exploration **start** (`AGE_EXPLORATION`, `PreviousAgeCount="1"`) gets the same five as
+above. Transcendent Victory (6×, `DominationPercent="500"`) is not an Exploration-start tier
+at all — it only exists for an Antiquity-start campaign with `PreviousAgeCount="1"`, i.e.
+while that campaign is still in the Exploration age.
 
 **The mod never hardcodes this.** It reads `GameInfo.VictoryDominationPercents` at runtime
 using the same filter the game's own tooltip uses (campaign start age + `previousAgeCount`),
 so a rules mod or a future patch that edits those rows is picked up automatically. The table
 above is documentation only.
 
-**Scientific victory is not a domination victory** — it has no rows in that table. It is a
-flat race to **100 Innovation**, then an **active Launch Pad held for 5 turns**.
+**Scientific victory is not a domination victory** — it has no rows in that table. Its row in
+`<VictoryTypes>` reads `ScoringType="COUNTDOWN_VICTORY_SCORING_TYPE_FIXED_SCORE"`
+`MinimumPoints="100"`: a flat race to 100, then the countdown. The mod reads both values from
+that row rather than hardcoding them.
 
-Crossing a threshold starts a **5-turn countdown**. Dropping back below it **pauses** the
-countdown — progress is saved, not reset. You can fall below either by losing points or by
-second place gaining enough to push the goal back up.
+Crossing a threshold starts a countdown of `CountdownDuration` turns (**5** for all four
+victories in the shipped data). Dropping back below it **pauses** the countdown — progress is
+saved, not reset. You can fall below either by losing points or by second place gaining enough
+to push the goal back up.
 
 > Note: `Base/modules/base-standard/text/en_us/AdvisorText.xml` still ships a **stale
 > pre-1.4.0 tier table** that contradicts `victories.xml` (and contradicts itself). Ignore it;
 > `victories.xml`, the Civilopedia, and the live tooltip all agree with the table above.
 
-## How the forecast is computed
+## How the threshold is computed
 
-Score-per-turn is not exposed by the API, so the mod samples each civ's score once per turn
-and estimates a linear rate over a rolling 12-turn window.
+```
+goal(tier) = tier.multiplier × second place's CURRENT score
+```
 
-- **With ≥2 samples** — scores are projected forward to the turn the next tier begins, using
-  the observed age-progress rate to convert "60% age progress" into a turn count.
-- **With <2 samples** (just installed, or freshly loaded) — scores are held flat. That still
-  answers a genuinely useful question exactly: *would the lower threshold already be satisfied
-  by the standings as they stand?* The footer says which mode is active.
+A countdown is imminent when `leader.points >= goal(next tier)`. That is the whole model.
 
-Only the projected leader can be ON TRACK for a dominance victory, since the goal is defined
-as a multiple of *second* place.
+No sampling, no rate estimation, no turn projections — all of that was removed. The only
+inputs are the live scores and the tier ladder, both read fresh on every refresh.
 
 ## Game APIs used
+
+Every entry below was read out of the installed 1.4.0 build's own
+`ui-next/screens/victories/victories-screen-model.js`, so the mod calls exactly what the base
+screen calls.
 
 | Purpose | API |
 |---|---|
 | Age progress % | `Game.AgeProgressManager.getCurrentAgeProgressionPoints() / getMaxAgeProgressionPoints()` |
+| Victory catalogue | `GameInfo.VictoryTypes` (scoring, `$hash`) joined to `GameInfo.Victories` (`VictoryClassType`) |
 | Tier ladder | `GameInfo.VictoryDominationPercents` |
 | Point Goal | `Game.VictoryManager.getCountdownVictoryDominanceScore(hash)` |
+| Player list | `Players.getAlive()` filtered by `isMajor && Victories` |
 | Per-civ score | `player.Victories.getPointsForVictoryType(hash)` |
-| Tier change event | `engine.on('VictoryThresholdChanged', …)` |
+| Countdown state | `player.Victories.getVictoryCountdownStatus(hash)` → `{ turns, isDominant }` |
+| Leader label | `player.leaderName` |
+| Met/unmet | `Players.get(GameContext.localPlayerID).Diplomacy.hasMet(id)` |
+| Refresh events | `VictoryPointsChanged`, `VictoryDominanceChanged`, `VictoryCountdownChanged`, `VictoryThresholdChanged` |
 | Campaign shape | `Configuration.getGame().campaignStartAgeType` / `.previousAgeCount` |
 
-The screen itself is `screen-victory-progress`, rebuilt in SolidJS under
-`Base/modules/base-standard/ui-next/screens/victories/`. The mod injects into
-`[data-name="SummaryVictoryCard"]` / `.victories-summary-box`, matching the victory type via
-the per-card classes `victories-summary-{cultural,economic,military,scientific}`.
+`Players.getAliveMajors()` does **not** exist in this build (`getAliveMajorIds()` does); the
+game's own leaderboard filters `getAlive()` instead, and so does the mod.
+
+### Where the block is injected
+
+`ui-next/screens/victories/victories-screen.js` ends with
+`defineLegacyComponent("screen-victory-progress", …)`, so the SolidJS screen registers under
+the same tag as the older `ui/victory-progress/` panel and is the one that actually opens.
+
+Each card is an `Activatable` — a plain `<div>` — carrying `data-name="SummaryVictoryCard"`
+and `class="victories-summary-box …"`. The per-type classes
+`victories-summary-{military,cultural,economic,scientific}` are **not** on that card: the
+model passes them as `props.summaryBg`, which lands on the card's background child
+`.victories-summary-bg`. The mod therefore identifies a card by reading the classes off that
+child. (Matching them on the card itself was the reason an earlier revision injected nothing.)
 
 ## Runtime layout
 
@@ -95,7 +140,7 @@ civ7-tot-victory-forecaster.modinfo           — manifest (UIScripts, not Impor
 ui/victory-forecaster/victory-forecaster.js   — the whole mod
 text/en_us/ModInfoText.xml                    — mod browser strings
 text/en_us/InGameText.xml                     — in-game strings
-scripts/install.sh                            — symlink installer (macOS)
+scripts/install.sh                            — copy into Mods/ + clear Mods.sqlite (macOS)
 scripts/view_logs.sh                          — stream [TOT-VF] console output
 scripts/upload_workshop.sh                    — steamcmd Workshop upload
 docs/HANDOFF.md                               — confidence table + verification steps
@@ -129,12 +174,24 @@ Enable **ToT Victory Forecaster [Local Dev]** in Additional Content, then restar
 
 ## Status
 
-This mod has **not yet been run in-game**. See [`docs/HANDOFF.md`](docs/HANDOFF.md) for
-what is confirmed vs inferred, how to validate against your local Civ7 install, and how to
-read the startup diagnostics line.
+**Runs in-game.** First successful smoke test 2026-09-09: the mod loads, injects into all four
+victory cards (`outcomes: {"ok": 4}`), and every score it reads matches the game's own
+leaderboard.
+
+The forecast compares **current** standings against each upcoming tier's goal — no score
+extrapolation, so the numbers reconcile with the card's own leaderboard. The only estimate is
+the `in Nt` tier timing, from age progress.
+
+See [`docs/HANDOFF.md`](docs/HANDOFF.md) for the full confidence table and what the smoke test
+settled.
 
 ## Roadmap
 
-- **Phase 1** (current): forecast strip on the Summary tab, Modern age focus
-- **Phase 2**: badges on individual player rows; per-victory detail tabs
-- **Phase 3**: countdown-aware forecasting (pause/resume), Exploration-age tiers
+- **Phase 1** (current): forecast strip on the Summary tab, Modern age focus.
+  Countdown state (`⏳` line) landed early — `getVictoryCountdownStatus` turned out to be
+  confirmable from the installed build without a runtime test.
+- **Phase 2**: badges on individual player rows; per-victory detail tabs. Those rows are
+  SolidJS-managed and re-render underneath any injected node, so they need a different
+  approach from the append-a-block strategy used for the cards.
+- **Phase 3**: better projection than a two-point linear rate (least-squares over the
+  window), and Exploration-age tier coverage.

@@ -1,15 +1,14 @@
 // Civ7 Test of Time — Victory Forecaster
 //
-// Augments the in-game VICTORIES screen (screen-victory-progress) with a forecast strip
-// under each victory card, flagging which civ is projected to cross the threshold when the
-// victory Point Goal next drops.
+// Augments the in-game VICTORIES screen with a forecast strip inside each victory card,
+// flagging which civ is projected to cross the threshold when the Point Goal next drops.
 //
 // No button, no user interaction. Install the mod and the screen gains the extra rows.
 //
 // ─────────────────────────────────────────────────────────────────────────────────────────
-// HOW ToT VICTORY ACTUALLY WORKS (verified against shipped 1.4.0 game files)
+// HOW VICTORY ACTUALLY WORKS  (verified against the INSTALLED 1.4.0 build, not a mirror)
 //
-// Base/modules/base-standard/data/victories.xml declares <VictoryDominationPercents>:
+// base-standard/data/victories.xml declares <VictoryDominationPercents>:
 //     <Row VictoryType="VICTORY_CULTURE_MODERN" Name="LOC_VICTORY_NAME_4"
 //          StartingAge="AGE_ANTIQUITY" MinAgeProgressPercent="40"
 //          DominationPercent="100" PreviousAgeCount="2"/>
@@ -25,34 +24,74 @@
 //     age >= 80%   1.25x   Narrow Victory        (LOC_VICTORY_NAME_6)
 //
 // We never hardcode that ladder — it is read live from GameInfo.VictoryDominationPercents
-// using the same filter the game's own tooltip uses (see calcTooltipForVictory in
+// with the same filter the game's own tooltip uses (calcTooltipForVictory in
 // ui-next/screens/victories/victories-screen-model.js). The table above is documentation
-// only, so a ToT DLC or a rules mod that edits those rows is picked up automatically.
+// only, so a DLC or rules mod that edits those rows is picked up automatically.
 //
-// Science is NOT a domination victory: it has no rows in that table. It is a flat race to
-// 100 Innovation, then an active Launch Pad held for 5 turns.
+// Science is NOT a domination victory. GameInfo.VictoryTypes gives it
+// ScoringType="COUNTDOWN_VICTORY_SCORING_TYPE_FIXED_SCORE" MinimumPoints="100" — a flat race
+// to 100, read from data here rather than assumed.
 //
-// Reaching a threshold starts a 5-turn countdown. Dropping back below it PAUSES the
-// countdown (progress is saved, not reset) — either by losing points, or by 2nd place
-// gaining enough to push the goal up.
+// Reaching a threshold starts a CountdownDuration-turn countdown (5 in the shipped data).
+// Dropping back below PAUSES it (progress saved, not reset) — either by losing points, or by
+// 2nd place gaining enough to push the goal up.
+//
+// ─── WHAT THIS MOD DRAWS ─────────────────────────────────────────────────────────────────
+// Nothing of its own. It augments the stock Victories screen in two places:
+//
+//   1. The leaderboard score of any civ that ALREADY clears the goal the next tier will set
+//      turns red — that civ starts a victory countdown the moment the Point Goal drops.
+//      Only the leader can ever qualify: the goal is a multiple (>1) of SECOND place, so no
+//      one below first can clear it.
+//   2. The card's hover tooltip gains, in each victory-tier section, the actual Point Goal
+//      that tier produces and the arithmetic behind it, plus a callout naming the civ whose
+//      countdown that tier would start.
+//
+// Every figure is exact arithmetic over CURRENT standings. There is no projection anywhere:
+// the Point Goal falls because the MULTIPLIER drops, not because scores move.
+//
+// ─── WHERE THE DOM FACTS COME FROM ───────────────────────────────────────────────────────
+// summary-victory-tab.js renders each card as an Activatable (a plain <div>) carrying
+//     data-name="SummaryVictoryCard"  class="victories-summary-box …"
+// Its FIRST child is the background layer:
+//     class="victories-summary-bg … ${props.summaryBg}"
+// and props.summaryBg is where victories-summary-{military,cultural,economic,scientific}
+// actually lives (victories-screen-model.js, populateData). Those per-type classes are NOT
+// on the card itself — reading them off the card is the bug this file previously had.
 // ─────────────────────────────────────────────────────────────────────────────────────────
 
 const VF_TAG         = '[TOT-VF]';
-const VF_BLOCK_CLASS = 'vf-forecast';
 
-// Victory types, and the per-card CSS class the SolidJS summary tab puts on each column.
-const VICTORY_DEFS = [
-  { type: 'VICTORY_CULTURE_MODERN',  cardClass: 'victories-summary-cultural',   label: 'Cultural'   },
-  { type: 'VICTORY_ECONOMIC_MODERN', cardClass: 'victories-summary-economic',   label: 'Economic'   },
-  { type: 'VICTORY_MILITARY_MODERN', cardClass: 'victories-summary-military',   label: 'Military'   },
-  { type: 'VICTORY_SCIENCE_MODERN',  cardClass: 'victories-summary-scientific', label: 'Scientific' },
-];
+const CARD_SELECTOR = '[data-name="SummaryVictoryCard"], .victories-summary-box';
+const BG_CLASS      = 'victories-summary-bg';
 
-const SCIENCE_TYPE            = 'VICTORY_SCIENCE_MODERN';
-const SCIENCE_INNOVATION_GOAL = 100;   // flat, confirmed from Civilopedia
-const COUNTDOWN_TURNS         = 5;     // confirmed from Civilopedia
-const HISTORY_WINDOW          = 12;    // turns of samples kept for rate estimation
-const MIN_SAMPLES_FOR_RATE    = 2;
+// VictoryClassType -> the summaryBg class the model stamps on the card's background layer.
+// Mirrors the switch in victories-screen-model.js populateData().
+const CLASS_TO_BG = {
+  VICTORY_CLASS_MILITARY: 'victories-summary-military',
+  VICTORY_CLASS_CULTURE:  'victories-summary-cultural',
+  VICTORY_CLASS_ECONOMIC: 'victories-summary-economic',
+  VICTORY_CLASS_SCIENCE:  'victories-summary-scientific',
+};
+
+// GameInfo.VictoryTypes.ScoringType. The other shipped value is
+// COUNTDOWN_VICTORY_SCORING_TYPE_DOMINATION (culture/economic/military), which is the
+// default branch here.
+const SCORING_FIXED_SCORE = 'COUNTDOWN_VICTORY_SCORING_TYPE_FIXED_SCORE';
+
+// Marks every node this mod adds, so the MutationObserver can ignore its own work and so
+// re-augmenting a tooltip is idempotent.
+const VF_MARK   = 'vf-aug';
+const HOT_ATTR  = 'data-vf-hot';
+
+// VictoryClassType -> the longform blurb the base tooltip prints. Used to work out WHICH
+// victory a portalled tooltip belongs to; the four strings are distinct.
+const CLASS_TO_DESC = {
+  VICTORY_CLASS_MILITARY: 'LOC_VICTORY_MILITARY_LONGFORM',
+  VICTORY_CLASS_CULTURE:  'LOC_VICTORY_CULTURAL_LONGFORM',
+  VICTORY_CLASS_ECONOMIC: 'LOC_VICTORY_ECONOMIC_LONGFORM',
+  VICTORY_CLASS_SCIENCE:  'LOC_VICTORY_SCIENTIFIC_LONGFORM',
+};
 
 function vfLog(msg, data) {
   try {
@@ -60,36 +99,92 @@ function vfLog(msg, data) {
   } catch { /* logging must never throw into the game UI */ }
 }
 
-// ── GAME DATA ────────────────────────────────────────────────────────────────────────────
+// ── VICTORY CATALOGUE ────────────────────────────────────────────────────────────────────
+//
+// Built from the live database rather than a hardcoded list, so renamed or DLC-added
+// victories are handled. GameInfo.VictoryTypes carries scoring rules and $hash;
+// GameInfo.Victories carries VictoryClassType. The screen model joins the same two tables.
 
-function victoryHash(victoryTypeString) {
+let catalogue = null;
+
+function buildCatalogue() {
+  const out = [];
   try {
-    if (typeof Database !== 'undefined' && Database.makeHash) return Database.makeHash(victoryTypeString);
-  } catch { }
-  try {
-    return GameInfo.Victories?.lookup?.(victoryTypeString)?.$hash ?? null;
-  } catch { }
+    GameInfo.VictoryTypes.forEach(vt => {
+      let def = null;
+      try { def = GameInfo.Victories.find(v => v.VictoryType === vt.VictoryType); } catch { }
+      const bg = def ? CLASS_TO_BG[def.VictoryClassType] : undefined;
+      if (!bg) return;   // score/domination-classic victories have no summary card
+
+      let hash = vt.$hash;
+      if (hash == null) {
+        try { hash = Database.makeHash(vt.VictoryType); } catch { }
+      }
+      if (hash == null) return;
+
+      out.push({
+        type:      vt.VictoryType,
+        hash,
+        classType: def.VictoryClassType,
+        bgClass:   bg,
+        scoring:   vt.ScoringType,
+        fixedGoal: Number(vt.MinimumPoints) || 0,
+        countdown: Number(vt.CountdownDuration) || 0,
+      });
+    });
+  } catch (e) {
+    vfLog('buildCatalogue failed', String(e));
+  }
+  return out;
+}
+
+function victories() {
+  if (!catalogue || !catalogue.length) catalogue = buildCatalogue();
+  return catalogue;
+}
+
+function isFixedScore(v) { return v.scoring === SCORING_FIXED_SCORE; }
+
+// Diagnostics only. The game calls this with both a type string (populateData) and a hash
+// (victories-screen.js), so both forms are tried. It is deliberately NOT used to gate
+// injection: a card only exists in the DOM when the victory is already enabled, so gating on
+// it could only ever produce false negatives.
+function victoryEnabled(v) {
+  for (const arg of [v.type, v.hash]) {
+    try {
+      const r = Game.VictoryManager.isCountdownVictoryEnabled(arg);
+      if (typeof r === 'boolean') return r;
+    } catch { }
+  }
   return null;
 }
 
-// Age progress as a percentage. This is exactly how victories-screen-model.js computes it.
+// ── GAME DATA ────────────────────────────────────────────────────────────────────────────
+
+// Age progress as a percentage. Exactly how victories-screen-model.js computes it.
 function ageProgressPct() {
   try {
     const cur = Game.AgeProgressManager.getCurrentAgeProgressionPoints();
     const max = Game.AgeProgressManager.getMaxAgeProgressionPoints();
-    if (!max) return null;
+    if (!max || max <= 0) return null;
     return (cur / max) * 100;
   } catch {
     return null;
   }
 }
 
-function ageProgressPoints() {
-  try { return Game.AgeProgressManager.getCurrentAgeProgressionPoints(); } catch { return null; }
+// "One more turn" / extended games have no age timer, so no tier ladder can advance.
+function isExtendedGame() {
+  try {
+    return Game.AgeProgressManager.isExtendedGame ||
+           Game.AgeProgressManager.getMaxAgeProgressionPoints() <= 0;
+  } catch {
+    return false;
+  }
 }
 
 // The tier ladder for one victory type, ASCENDING by MinAgeProgressPercent.
-// Filter matches the game's own: campaign START age + how many ages have elapsed since.
+// Filter matches calcTooltipForVictory: campaign START age + ages elapsed since.
 function tierLadder(victoryTypeString) {
   const rows = [];
   try {
@@ -133,204 +228,166 @@ function localize(key, fallback) {
   return fallback ?? key;
 }
 
+// Players.getAliveMajors() does NOT exist in this build. The game itself filters
+// Players.getAlive() by isMajor && Victories (calcVictoryLeaderboard).
 function majorPlayers() {
-  try { if (Players.getAliveMajors) return Players.getAliveMajors(); } catch { }
-  try { return (Players.getAlive?.() ?? []).filter(p => p?.isMajor); } catch { }
-  return [];
+  try {
+    return (Players.getAlive?.() ?? []).filter(p => p && p.isMajor && p.Victories);
+  } catch {
+    return [];
+  }
 }
 
-function playerLabel(player) {
-  const raw = player?.name ?? player?.leaderName ?? player?.civilizationFullName ?? '';
+// The screen anonymises civs the local player has not met (LOC_UI_UNMET_PLAYER_NAME).
+// Mirror that rather than leaking names the base UI deliberately withholds.
+function metChecker() {
+  try {
+    const local = Players.get(GameContext.localPlayerID);
+    const diplo = local?.Diplomacy;
+    if (!diplo) return () => true;
+    return (id) => id === GameContext.localPlayerID || diplo.hasMet(id);
+  } catch {
+    return () => true;
+  }
+}
+
+function playerLabel(player, hasMet) {
+  if (!hasMet) return localize('LOC_UI_UNMET_PLAYER_NAME', 'Unmet civ');
+  const raw = player?.leaderName ?? player?.name ?? player?.civilizationFullName ?? '';
   const name = localize(raw, String(raw || ''));
   return name || `Player ${player?.id ?? '?'}`;
 }
 
-// Current standings for one victory type, highest score first.
-function leaderboard(victoryTypeString) {
-  const hash = victoryHash(victoryTypeString);
-  if (hash == null) return [];
+// Current standings for one victory, highest score first.
+function leaderboard(v) {
   const rows = [];
+  const hasMet = metChecker();
   let localId = -1;
   try { localId = GameContext.localPlayerID; } catch { }
 
   for (const player of majorPlayers()) {
     let pts = 0;
-    try { pts = Number(player.Victories?.getPointsForVictoryType?.(hash) ?? 0) || 0; } catch { }
-    rows.push({ id: player.id, name: playerLabel(player), points: pts, isLocal: player.id === localId });
+    try { pts = Number(player.Victories.getPointsForVictoryType(v.hash)) || 0; } catch { }
+
+    let turns = 0, dominant = false;
+    try {
+      const status = player.Victories.getVictoryCountdownStatus(v.hash);
+      if (status) {
+        turns    = Number(status.turns) || 0;
+        dominant = !!status.isDominant;
+      }
+    } catch { }
+
+    const met = hasMet(player.id);
+    rows.push({
+      id: player.id,
+      name: playerLabel(player, met),
+      points: pts,
+      isLocal: player.id === localId,
+      turns,
+      dominant,
+    });
   }
   rows.sort((a, b) => b.points - a.points);
   return rows;
 }
 
 // The authoritative Point Goal the screen itself renders (-1 when the victory is locked).
-function pointGoal(victoryTypeString) {
-  try {
-    const hash = victoryHash(victoryTypeString);
-    if (hash == null) return -1;
-    return Number(Game.VictoryManager.getCountdownVictoryDominanceScore(hash));
-  } catch {
-    return -1;
-  }
+function pointGoal(v) {
+  try { return Number(Game.VictoryManager.getCountdownVictoryDominanceScore(v.hash)); }
+  catch { return -1; }
 }
 
-// ── HISTORY & RATE ESTIMATION ────────────────────────────────────────────────────────────
+// MinimumPoints from the database (100 for science in the shipped data); the live manager
+// value wins when it reports a real goal.
+function fixedGoalFor(v) {
+  const live = pointGoal(v);
+  if (live > 0) return live;
+  return v.fixedGoal > 0 ? v.fixedGoal : 100;
+}
+
+// ── THRESHOLD ASSESSMENT ─────────────────────────────────────────────────────────────────
 //
-// Score-per-turn cannot be read from the API, so we sample it. History lives for the
-// session only; with too few samples we fall back to a static (no-growth) forecast, which
-// is still exact for the question "would the lower threshold already be satisfied?".
+// The whole mod reduces to one calculation, done entirely on current scores:
+//     goal(tier) = tier.multiplier x SECOND PLACE's current score
+// and the question "does the leader already clear the goal the NEXT tier will set?".
 
-const history = {
-  turns: [],   // [{ turn, agePoints, scores: { victoryType: { playerId: points } } }]
-};
+function assess(v) {
+  const board = leaderboard(v);
+  if (board.length < 2) return null;
 
-function sampleNow() {
-  let turn = null;
-  try { turn = Game.turn; } catch { }
-  if (turn == null) return;
-  if (history.turns.length && history.turns[history.turns.length - 1].turn === turn) return;
+  const leader = board[0];
+  const second = board[1];
+  const liveGoal = pointGoal(v);
 
-  const scores = {};
-  for (const def of VICTORY_DEFS) {
-    const board = leaderboard(def.type);
-    if (!board.length) continue;
-    const byId = {};
-    for (const row of board) byId[row.id] = row.points;
-    scores[def.type] = byId;
+  if (isFixedScore(v)) {
+    const goal = fixedGoalFor(v);
+    return {
+      v, board, leader, second, fixed: true,
+      currentGoal: goal, nextGoal: null, triggerGoal: goal,
+      triggers: goal > 0 && leader.points >= goal,
+      nowClears: goal > 0 && leader.points >= goal,
+      current: null, next: null, liveGoal,
+    };
   }
 
-  history.turns.push({ turn, agePoints: ageProgressPoints(), scores });
-  while (history.turns.length > HISTORY_WINDOW) history.turns.shift();
-}
+  const ladder = tierLadder(v.type);
+  const { current, upcoming } = splitTiers(ladder, ageProgressPct() ?? 0);
+  const next = upcoming[0] ?? null;
 
-// Linear rate between the oldest and newest sample. null when there is not enough data.
-function rateBetweenSamples(pick) {
-  if (history.turns.length < MIN_SAMPLES_FOR_RATE) return null;
-  const first = history.turns[0];
-  const last  = history.turns[history.turns.length - 1];
-  const dt    = last.turn - first.turn;
-  if (dt <= 0) return null;
-  const a = pick(first);
-  const b = pick(last);
-  if (a == null || b == null) return null;
-  return (b - a) / dt;
-}
+  // Prefer the game's own Point Goal for the tier in force — it is authoritative, and if it
+  // disagrees with our arithmetic the diagnostics line will show it.
+  const derivedNow  = current ? second.points * current.multiplier : null;
+  const currentGoal = liveGoal > 0 ? liveGoal : derivedNow;
+  const nextGoal    = next ? second.points * next.multiplier : null;
 
-function scoreRate(victoryType, playerId) {
-  return rateBetweenSamples(s => s.scores?.[victoryType]?.[playerId]);
-}
-
-// Age-progress PERCENT gained per turn.
-function agePctRate() {
-  const ptsRate = rateBetweenSamples(s => s.agePoints);
-  if (ptsRate == null || ptsRate <= 0) return null;
-  try {
-    const max = Game.AgeProgressManager.getMaxAgeProgressionPoints();
-    if (!max) return null;
-    return (ptsRate / max) * 100;
-  } catch {
-    return null;
-  }
-}
-
-function turnsUntilAgePct(targetPct) {
-  const cur  = ageProgressPct();
-  const rate = agePctRate();
-  if (cur == null || rate == null || rate <= 0) return null;
-  if (targetPct <= cur) return 0;
-  return Math.ceil((targetPct - cur) / rate);
-}
-
-// ── FORECAST ─────────────────────────────────────────────────────────────────────────────
-
-// Project every player's score forward by `turnsAhead` and rank the result.
-// When no rate is known, scores are held flat — the forecast then answers
-// "does the lower threshold already reward the standings as they are?".
-function projectBoard(victoryType, board, turnsAhead) {
-  const projected = board.map(row => {
-    const rate = scoreRate(victoryType, row.id);
-    const grown = (rate != null && turnsAhead != null) ? row.points + rate * turnsAhead : row.points;
-    return { ...row, projected: Math.max(0, grown), rate };
-  });
-  projected.sort((a, b) => b.projected - a.projected);
-  return projected;
-}
-
-// A dominance victory is winnable by exactly one civ: only the leader can clear
-// multiplier x runner-up.
-function forecastDominanceTier(victoryType, board, tier) {
-  const turnsAhead = turnsUntilAgePct(tier.minAgePct);
-  const projected  = projectBoard(victoryType, board, turnsAhead);
-  if (projected.length < 2) return null;
-
-  const leader = projected[0];
-  const second = projected[1];
-  const goal   = second.projected * tier.multiplier;
+  // What decides "imminent": the next reduction if one is coming, else the goal in force.
+  const triggerGoal = nextGoal != null ? nextGoal : currentGoal;
 
   return {
-    tier,
-    turnsAhead,
-    estimated: turnsAhead != null && projected.some(p => p.rate != null),
-    leader,
-    goal,
-    onTrack: leader.projected >= goal && leader.projected > 0,
+    v, board, leader, second, fixed: false, ladder, current, next,
+    currentGoal, derivedNow, nextGoal, triggerGoal, liveGoal,
+    triggers:  triggerGoal != null && triggerGoal > 0 && leader.points >= triggerGoal,
+    nowClears: currentGoal != null && currentGoal > 0 && leader.points >= currentGoal,
   };
 }
 
-function forecastScience(board) {
-  // Flat race to 100 Innovation — several civs can be on track at once.
-  const contenders = board.map(row => {
-    const rate = scoreRate(SCIENCE_TYPE, row.id);
-    const remaining = SCIENCE_INNOVATION_GOAL - row.points;
-    const eta = (rate != null && rate > 0 && remaining > 0) ? Math.ceil(remaining / rate) : null;
-    return { ...row, rate, eta, reached: row.points >= SCIENCE_INNOVATION_GOAL };
-  });
-  contenders.sort((a, b) => b.points - a.points);
-  return contenders;
-}
-
-// ── RENDERING ────────────────────────────────────────────────────────────────────────────
+// ── SHARED RENDERING ─────────────────────────────────────────────────────────────────────
 
 const STYLE_ID = 'vf-forecast-style';
 
 function ensureStyles() {
-  if (document.getElementById(STYLE_ID)) return;
-  const style = document.createElement('style');
-  style.id = STYLE_ID;
-  style.textContent = `
-.vf-forecast {
-  margin: 0.25rem 0.75rem 0.5rem;
-  padding: 0.4rem 0.55rem;
-  border: 1px solid rgba(201, 162, 39, 0.45);
-  border-radius: 3px;
-  background: rgba(0, 0, 0, 0.38);
-  font-size: 0.72rem;
-  line-height: 1.4;
-}
-.vf-head {
+  try {
+    if (document.getElementById(STYLE_ID)) return;
+    const style = document.createElement('style');
+    style.id = STYLE_ID;
+    style.textContent = `
+.vf-tip { margin: 0.25rem 0.6rem 0.5rem; text-align: center; }
+.vf-tip-calc {
   color: #c9a227;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  font-size: 0.64rem;
-  margin-bottom: 0.25rem;
-  border-bottom: 1px solid rgba(201, 162, 39, 0.25);
-  padding-bottom: 0.15rem;
+  font-size: 0.62rem;
+  line-height: 1.45;
+  opacity: 0.95;
 }
-.vf-line { display: flex; justify-content: space-between; gap: 0.5rem; }
-.vf-line + .vf-line { margin-top: 0.1rem; }
-.vf-when  { color: #c9a227; opacity: 0.85; }
-.vf-on    { color: #46d67a; font-weight: 600; }
-.vf-off   { color: #98a1b0; }
-.vf-name  { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.vf-num   { opacity: 0.85; font-variant-numeric: tabular-nums; }
-.vf-note  { color: #98a1b0; font-size: 0.62rem; opacity: 0.85; margin-top: 0.2rem; }
-.vf-est   { color: #c9a227; opacity: 0.75; }
+.vf-tip-verdict { font-size: 0.66rem; line-height: 1.5; margin-top: 0.1rem; }
+.vf-tip-hot  { color: #ff6b6b; }
+.vf-tip-cool { color: #b9c2d0; }
+.vf-tip-rule {
+  height: 1px;
+  margin: 0.3rem 1.2rem 0.35rem;
+  background: rgba(201, 162, 39, 0.3);
+}
 `;
-  document.head.appendChild(style);
+    document.head.appendChild(style);
+  } catch (e) {
+    vfLog('ensureStyles failed', String(e));
+  }
 }
 
 function fmt(n) {
   if (n == null || !isFinite(n)) return '—';
   const r = Math.round(n);
+  try { return Locale.toNumber(r); } catch { }
   try { return r.toLocaleString(); } catch { return String(r); }
 }
 
@@ -341,160 +398,249 @@ function el(tag, cls, text) {
   return node;
 }
 
-function line(leftText, leftCls, rightText) {
-  const row = el('div', 'vf-line');
-  row.appendChild(el('span', `vf-name ${leftCls ?? ''}`.trim(), leftText));
-  if (rightText != null) row.appendChild(el('span', 'vf-num', rightText));
-  return row;
+// ── 1. RED SCORE ON THE LEADERBOARD ──────────────────────────────────────────────────────
+//
+// PointGoalPanel renders each leaderboard row's score as a div carrying `font-body text-2xs
+// self-center mr-2`. The portrait wrapper shares `mr-2 self-center` but has no `text-2xs`,
+// and the name field has `text-2xs` but also `victories-name-field` - so the pair of classes
+// minus the name field picks out exactly the score cells, in leaderboard order.
+//
+// Colour goes on inline style, not className: the base component owns className through a
+// createRenderEffect and would wipe a class of ours on its next run.
+function scoreCells(card) {
+  const out = [];
+  try {
+    const panel = card.querySelector('[data-name="Point-Goal-Panel"]');
+    if (!panel) return out;
+    panel.querySelectorAll('div').forEach(d => {
+      const c = typeof d.className === 'string' ? d.className : '';
+      if (c.indexOf('victories-name-field') !== -1) return;
+      if (c.indexOf('text-2xs') !== -1 && c.indexOf('mr-2') !== -1) out.push(d);
+    });
+  } catch (e) {
+    vfLog('scoreCells failed', String(e));
+  }
+  return out;
 }
 
-function buildDominanceBlock(victoryType, agePct) {
-  const ladder = tierLadder(victoryType);
-  if (!ladder.length) return null;
+function paintScores(card, a) {
+  const cells = scoreCells(card);
+  if (!cells.length) return 0;
+  let painted = 0;
 
-  const { current, upcoming } = splitTiers(ladder, agePct);
-  const board = leaderboard(victoryType);
-  if (board.length < 2) return null;
+  cells.forEach((cell, i) => {
+    // Only the leader can clear a goal defined as (>1) x second place.
+    const hot = !!(a && a.triggers && i === 0);
+    try {
+      if (hot) {
+        cell.style.setProperty('color', '#ff5a5a');
+        cell.style.setProperty('opacity', '1');
+        cell.setAttribute(HOT_ATTR, '1');
+        painted++;
+      } else if (cell.getAttribute && cell.getAttribute(HOT_ATTR)) {
+        cell.style.removeProperty('color');
+        cell.style.removeProperty('opacity');
+        cell.removeAttribute(HOT_ATTR);
+      }
+    } catch { /* styling must never throw into the game UI */ }
+  });
 
-  const box = el('div', VF_BLOCK_CLASS);
-
-  if (!upcoming.length) {
-    box.appendChild(el('div', 'vf-head', 'Final tier reached'));
-    const goalNow = pointGoal(victoryType);
-    const leader  = board[0];
-    const met     = goalNow > 0 && leader.points >= goalNow;
-    box.appendChild(line(
-      `${met ? '✓' : '✗'} ${leader.name}`,
-      met ? 'vf-on' : 'vf-off',
-      `${fmt(leader.points)} / ${fmt(goalNow)}`,
-    ));
-    box.appendChild(el('div', 'vf-note',
-      current ? `No further reductions after ${localize(current.nameKey, 'current tier')}.` : ''));
-    return box;
-  }
-
-  // Look at the next two reductions — that is the window the player can actually plan for.
-  const tiers = upcoming.slice(0, 2);
-  let anyEstimated = false;
-
-  box.appendChild(el('div', 'vf-head', 'Forecast — next point goal drops'));
-
-  for (let i = 0; i < tiers.length; i++) {
-    const fc = forecastDominanceTier(victoryType, board, tiers[i]);
-    if (!fc) continue;
-    if (fc.estimated) anyEstimated = true;
-
-    const tierName = localize(fc.tier.nameKey, `${fc.tier.multiplier}x tier`);
-    const when = fc.turnsAhead != null
-      ? `${fc.tier.minAgePct}% age · ~${fc.turnsAhead}t`
-      : `${fc.tier.minAgePct}% age`;
-
-    const header = el('div', 'vf-line');
-    header.appendChild(el('span', 'vf-name vf-when',
-      `${i === 0 ? '▶' : '·'} ${tierName} ×${fc.tier.multiplier}`));
-    header.appendChild(el('span', 'vf-num vf-when', when));
-    box.appendChild(header);
-
-    if (fc.onTrack) {
-      box.appendChild(line(
-        `✓ ${fc.leader.name} ON TRACK`,
-        'vf-on',
-        `${fmt(fc.leader.projected)} / ${fmt(fc.goal)}`,
-      ));
-    } else {
-      box.appendChild(line(
-        `✗ ${fc.leader.name} short`,
-        'vf-off',
-        `${fmt(fc.leader.projected)} / ${fmt(fc.goal)}`,
-      ));
-    }
-  }
-
-  box.appendChild(el('div', 'vf-note', anyEstimated
-    ? `Projected from recent score rate · ${COUNTDOWN_TURNS}-turn countdown follows`
-    : `Standings held flat — play a turn or two for a trend-based projection`));
-
-  return box;
+  return painted;
 }
 
-function buildScienceBlock() {
-  const board = leaderboard(SCIENCE_TYPE);
-  if (!board.length) return null;
+// ── 2. TOOLTIP AUGMENTATION ──────────────────────────────────────────────────────────────
+//
+// Tooltips are portalled into #uinext-tooltips (tooltip.js:237). The victory card's tooltip
+// carries `victories-tooltip`, and its body is a stack of CardFrames (`data-name="Card-Frame"`):
+// [Required Points] [tier in force] [next tier]. The last two are conditional - a locked
+// victory renders neither, and science has no tier rows at all.
 
-  const box = el('div', VF_BLOCK_CLASS);
-  box.appendChild(el('div', 'vf-head', `Forecast — race to ${SCIENCE_INNOVATION_GOAL} innovation`));
+const TOOLTIP_SELECTOR = '.tooltip-content-root.victories-tooltip, .victories-tooltip';
 
-  const contenders = forecastScience(board).slice(0, 3);
-  let sawEta = false;
-
-  for (const c of contenders) {
-    if (c.reached) {
-      box.appendChild(line(`✓ ${c.name} at goal`, 'vf-on', `${fmt(c.points)} / ${SCIENCE_INNOVATION_GOAL}`));
-    } else if (c.eta != null) {
-      sawEta = true;
-      box.appendChild(line(`▶ ${c.name} ~${c.eta}t`, 'vf-on', `${fmt(c.points)} / ${SCIENCE_INNOVATION_GOAL}`));
-    } else {
-      box.appendChild(line(`· ${c.name}`, 'vf-off', `${fmt(c.points)} / ${SCIENCE_INNOVATION_GOAL}`));
-    }
-  }
-
-  box.appendChild(el('div', 'vf-note', sawEta
-    ? `Then hold an active Launch Pad for ${COUNTDOWN_TURNS} turns`
-    : `Play a turn or two for an ETA · needs a Launch Pad held ${COUNTDOWN_TURNS} turns`));
-
-  return box;
-}
-
-// ── INJECTION ────────────────────────────────────────────────────────────────────────────
-
-function victoryTypeForCard(card) {
-  for (const def of VICTORY_DEFS) {
-    if (card.classList?.contains(def.cardClass)) return def.type;
+// Identify the victory from the longform blurb the tooltip prints. Stateless, so it does not
+// care whether the tooltip was opened by mouse, keyboard or controller.
+function victoryFromTooltip(node) {
+  const text = node.textContent || '';
+  if (!text) return null;
+  for (const v of victories()) {
+    const key = CLASS_TO_DESC[v.classType];
+    if (!key) continue;
+    const desc = localize(key, '');
+    if (desc && desc.length > 24 && text.indexOf(desc.slice(0, 40)) !== -1) return v;
   }
   return null;
 }
 
-function findCards() {
-  const found = new Set();
-  document.querySelectorAll('[data-name="SummaryVictoryCard"], .victories-summary-box')
-    .forEach(node => found.add(node));
-  return Array.from(found);
+function tierFrame(frames, tierName) {
+  if (!tierName) return null;
+  // frames[0] is the "Required Points" blurb; tier sections start after it.
+  for (let i = 1; i < frames.length; i++) {
+    if ((frames[i].textContent || '').indexOf(tierName) !== -1) return frames[i];
+  }
+  return null;
 }
 
-function injectInto(card) {
-  const victoryType = victoryTypeForCard(card);
-  if (!victoryType) return false;
+// The lines appended inside one tier's section: the goal that tier yields, the arithmetic
+// behind it, and what it means for the leader.
+function tierDetail(a, mult, goal, isTrigger, whenPct) {
+  const wrap = el('div', `${VF_MARK} vf-tip`);
+  wrap.appendChild(el('div', 'vf-tip-rule'));
 
-  const agePct = ageProgressPct();
-  if (agePct == null) return false;
+  wrap.appendChild(el('div', 'vf-tip-calc',
+    `Point Goal ${fmt(goal)}  =  ×${mult} of 2nd place (${a.second.name} ${fmt(a.second.points)})`));
 
-  // Locked victories render pointGoal -1; leave those columns untouched.
-  if (victoryType !== SCIENCE_TYPE && pointGoal(victoryType) === -1) return false;
+  const clears = goal > 0 && a.leader.points >= goal;
+  const gap    = Math.abs(a.leader.points - goal);
 
-  const block = victoryType === SCIENCE_TYPE
-    ? buildScienceBlock()
-    : buildDominanceBlock(victoryType, agePct);
-  if (!block) return false;
-
-  // Coherent GT is not a full modern browser: `:scope` selectors and Element.replaceWith
-  // are not dependable across builds. Scan direct children and swap manually instead.
-  let existing = null;
-  for (const child of Array.from(card.children || [])) {
-    if (child.classList?.contains(VF_BLOCK_CLASS)) { existing = child; break; }
+  if (clears && isTrigger) {
+    wrap.appendChild(el('div', 'vf-tip-verdict vf-tip-hot',
+      whenPct != null
+        ? `⚠ ${a.leader.name} (${fmt(a.leader.points)}) already clears this — countdown starts at ${whenPct}% Age Progress`
+        : `⚠ ${a.leader.name} (${fmt(a.leader.points)}) already clears this — countdown running`));
+  } else if (clears) {
+    wrap.appendChild(el('div', 'vf-tip-verdict vf-tip-hot',
+      `⚠ ${a.leader.name} (${fmt(a.leader.points)}) clears this by ${fmt(gap)}`));
+  } else {
+    wrap.appendChild(el('div', 'vf-tip-verdict vf-tip-cool',
+      `${a.leader.name} leads on ${fmt(a.leader.points)} — ${fmt(gap)} short`));
   }
-  if (existing) card.replaceChild(block, existing);
-  else card.appendChild(block);
-  return true;
+
+  return wrap;
+}
+
+function augmentTooltip(root) {
+  // Idempotent: the observer sees our own inserts too.
+  if (root.querySelector(`.${VF_MARK}`)) return 'done';
+
+  const v = victoryFromTooltip(root);
+  if (!v) return 'unmatched';
+  const a = assess(v);
+  if (!a) return 'nodata';
+
+  const frames = Array.from(root.querySelectorAll('[data-name="Card-Frame"]'));
+  if (!frames.length) return 'noframes';
+
+  if (a.fixed) {
+    // No tier ladder: one fixed goal, so the blurb section carries the numbers.
+    const wrap = el('div', `${VF_MARK} vf-tip`);
+    wrap.appendChild(el('div', 'vf-tip-rule'));
+    wrap.appendChild(el('div', 'vf-tip-calc', `Point Goal ${fmt(a.currentGoal)} — fixed, not a multiple of 2nd place`));
+    const clears = a.currentGoal > 0 && a.leader.points >= a.currentGoal;
+    wrap.appendChild(el('div', `vf-tip-verdict ${clears ? 'vf-tip-hot' : 'vf-tip-cool'}`,
+      clears
+        ? `⚠ ${a.leader.name} (${fmt(a.leader.points)}) has reached it — countdown imminent`
+        : `${a.leader.name} leads on ${fmt(a.leader.points)} — ${fmt(a.currentGoal - a.leader.points)} short`));
+    frames[0].appendChild(wrap);
+    return 'ok';
+  }
+
+  let placed = 0;
+
+  // Section for the tier in force now.
+  if (a.current && a.currentGoal != null) {
+    const f = tierFrame(frames, localize(a.current.nameKey, ''));
+    if (f) {
+      // Imminence is decided by the NEXT tier when one exists, so the "in force" section only
+      // raises the alarm itself when it is the last tier there is.
+      f.appendChild(tierDetail(a, a.current.multiplier, a.currentGoal, a.next == null, null));
+      placed++;
+    }
+  }
+
+  // Section for the next reduction — the one that actually starts a countdown.
+  if (a.next && a.nextGoal != null) {
+    const f = tierFrame(frames, localize(a.next.nameKey, ''));
+    if (f) {
+      f.appendChild(tierDetail(a, a.next.multiplier, a.nextGoal, true, a.next.minAgePct));
+      placed++;
+    }
+  }
+
+  // Locked victory: the base tooltip renders no tier sections at all, so state what is coming.
+  if (!placed) {
+    const tier = a.next ?? a.current;
+    if (!tier) return 'notiers';
+    const goal = a.second.points * tier.multiplier;
+    const wrap = tierDetail(a, tier.multiplier, goal, true, tier.minAgePct);
+    wrap.insertBefore(
+      el('div', 'vf-tip-calc', `Locked until ${tier.minAgePct}% Age Progress — no Point Goal yet`),
+      wrap.children[1] ?? null);
+    frames[0].appendChild(wrap);
+    placed++;
+  }
+
+  return placed ? 'ok' : 'noplace';
+}
+
+// ── SWEEP ────────────────────────────────────────────────────────────────────────────────
+
+function findCards() {
+  const found = [];
+  try {
+    document.querySelectorAll(CARD_SELECTOR).forEach(node => {
+      if (found.indexOf(node) === -1) found.push(node);
+    });
+  } catch (e) {
+    vfLog('findCards failed', String(e));
+  }
+  return found;
+}
+
+// The per-type class lives on the card's background layer, not on the card.
+function bgClassesOf(card) {
+  const classes = [];
+  const collect = (node) => {
+    if (node?.classList?.contains(BG_CLASS)) {
+      for (const c of Array.from(node.classList)) classes.push(c);
+    }
+  };
+  try { card.querySelectorAll?.('.' + BG_CLASS).forEach(collect); } catch { }
+  if (!classes.length) {
+    for (const child of Array.from(card.children || [])) collect(child);
+  }
+  return classes;
+}
+
+function victoryForCard(card) {
+  const classes = bgClassesOf(card);
+  if (!classes.length) return null;
+  for (const v of victories()) {
+    if (classes.indexOf(v.bgClass) !== -1) return v;
+  }
+  return null;
 }
 
 function refreshAll(reason) {
-  let injected = 0;
+  const tally = {};
+  const bump  = k => { tally[k] = (tally[k] || 0) + 1; };
+
   const cards = findCards();
   for (const card of cards) {
-    try { if (injectInto(card)) injected++; } catch (e) { vfLog('inject failed', String(e)); }
+    try {
+      const v = victoryForCard(card);
+      if (!v) { bump('unmatched'); continue; }
+      const a = assess(v);
+      if (!a) { bump('nodata'); continue; }
+      bump(paintScores(card, a) ? 'hot' : 'cool');
+    } catch (e) {
+      bump('error');
+      vfLog('card sweep failed', String(e));
+    }
   }
-  if (cards.length) vfLog('refresh', { reason, cards: cards.length, injected });
-  return injected;
+
+  let tips = 0;
+  try {
+    document.querySelectorAll(TOOLTIP_SELECTOR).forEach(node => {
+      const r = augmentTooltip(node);
+      if (r === 'ok') tips++;
+      else if (r !== 'done') bump(`tip:${r}`);
+    });
+  } catch (e) {
+    vfLog('tooltip sweep failed', String(e));
+  }
+
+  if (cards.length || tips) vfLog('refresh', { reason, cards: cards.length, tips, ...tally });
+  return cards.length;
 }
 
 // ── CONTROLLER ───────────────────────────────────────────────────────────────────────────
@@ -510,23 +656,24 @@ class VictoryForecaster {
   constructor() {
     this._pending = null;
     ensureStyles();
-    sampleNow();
     this._observe();
     this._listen();
     this._diagnostics();
     this._schedule('init');
   }
 
-  // The victory screen is SolidJS and re-renders on tab switch, so watch for card nodes
-  // appearing anywhere under body rather than binding to one panel instance.
+  // Cards are re-created on tab switch and tooltips are portalled in on hover, so watch the
+  // whole document rather than binding to one panel instance.
   _observe() {
     try {
       this._observer = new MutationObserver(mutations => {
         for (const mut of mutations) {
           for (const node of mut.addedNodes) {
             if (node.nodeType !== 1) continue;
-            if (node.matches?.('[data-name="SummaryVictoryCard"], .victories-summary-box') ||
-                node.querySelector?.('[data-name="SummaryVictoryCard"], .victories-summary-box')) {
+            if (node.classList?.contains(VF_MARK)) continue;   // our own insert
+            if (node.closest?.(`.${VF_MARK}`)) continue;
+            if (node.matches?.(CARD_SELECTOR) || node.querySelector?.(CARD_SELECTOR) ||
+                node.matches?.(TOOLTIP_SELECTOR) || node.querySelector?.(TOOLTIP_SELECTOR)) {
               this._schedule('dom');
               return;
             }
@@ -543,43 +690,49 @@ class VictoryForecaster {
     const on = (evt, fn) => {
       try { engine.on(evt, fn); } catch { /* event not present in this build */ }
     };
-    // Sample scores once per turn so the rate estimate has data to work with.
-    on('PlayerTurnActivated', () => { sampleNow(); this._schedule('turn'); });
-    on('TurnBegin',           () => { sampleNow(); this._schedule('turn'); });
-    // Fired by the game when a tier boundary is crossed — the goal just dropped.
-    on('VictoryThresholdChanged', () => { sampleNow(); this._schedule('threshold'); });
+    const again = (reason) => () => this._schedule(reason);
+    on('PlayerTurnActivated',     again('turn'));
+    on('TurnBegin',               again('turn'));
+    on('VictoryPointsChanged',    again('points'));
+    on('VictoryDominanceChanged', again('dominance'));
+    on('VictoryCountdownChanged', again('countdown'));
+    on('VictoryThresholdChanged', again('threshold'));
   }
 
-  // Coalesce bursts of mutations into one rebuild on the next frame.
   _schedule(reason) {
     if (this._pending) return;
     this._pending = true;
     const run = () => {
       this._pending = null;
-      try { sampleNow(); refreshAll(reason); } catch (e) { vfLog('refresh failed', String(e)); }
+      try { refreshAll(reason); } catch (e) { vfLog('refresh failed', String(e)); }
     };
     try { requestAnimationFrame(() => setTimeout(run, 30)); } catch { setTimeout(run, 50); }
   }
 
-  // One-shot dump so a single in-game run tells us whether every assumption held.
   _diagnostics() {
     try {
       const agePct = ageProgressPct();
-      const summary = VICTORY_DEFS.map(def => {
-        const ladder = tierLadder(def.type);
-        const board  = leaderboard(def.type);
+      const summary = victories().map(v => {
+        const a = assess(v);
         return {
-          type:   def.type,
-          goal:   pointGoal(def.type),
-          tiers:  ladder.map(t => `${t.minAgePct}%:x${t.multiplier}`),
-          top:    board.slice(0, 2).map(b => `${b.name}=${b.points}`),
+          type: v.type,
+          goal: pointGoal(v),
+          // Our arithmetic vs the game's own Point Goal. A mismatch means the model is wrong.
+          derived: a && !a.fixed ? (a.derivedNow ?? null) : (a ? a.currentGoal : null),
+          next: a ? a.nextGoal : null,
+          triggers: a ? a.triggers : null,
+          tiers: tierLadder(v.type).map(t => `${t.minAgePct}%:x${t.multiplier}`),
+          top: a ? a.board.slice(0, 2).map(b => `${b.name}=${b.points}`) : [],
         };
       });
       vfLog('diagnostics', {
         agePct: agePct != null ? Math.round(agePct) : null,
-        turn:   (() => { try { return Game.turn; } catch { return null; } })(),
-        age:    (() => { try { return GameInfo.Ages.lookup(Game.age)?.AgeType; } catch { return null; } })(),
+        extended: isExtendedGame(),
+        turn: (() => { try { return Game.turn; } catch { return null; } })(),
+        age: (() => { try { return GameInfo.Ages.lookup(Game.age)?.AgeType; } catch { return null; } })(),
+        startAge: (() => { try { return GameInfo.Ages.lookup(Configuration.getGame().campaignStartAgeType)?.AgeType; } catch { return null; } })(),
         prevAgeCount: (() => { try { return Configuration.getGame().previousAgeCount; } catch { return null; } })(),
+        majors: majorPlayers().length,
         summary,
       });
     } catch (e) {
