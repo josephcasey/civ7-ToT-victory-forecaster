@@ -2,10 +2,10 @@
 <Database>
   <EnglishText>
     <Row Tag="LOC_MOD_TOT_VF_NAME">
-      <Text>ToT Victory Forecaster [Local Dev]</Text>
+      <Text>ToT Victory Forecaster</Text>
     </Row>
     <Row Tag="LOC_MOD_TOT_VF_DESCRIPTION">
-      <Text>Augments the in-game Victories screen. Under each victory card it adds a forecast strip naming which civ is projected to cross the threshold when the Point Goal next drops (Decisive 3x at 20% age progress, Momentous 2x at 40%, Substantive 1.5x at 60%, Narrow 1.25x at 80%), plus an ETA for the Scientific race to 100 Innovation. The tier ladder is read live from the game database, so rules mods and future patches are picked up automatically. No buttons and no user interaction — the screen simply gains extra rows.</Text>
+      <Text>Annotates the Victories screen so you can see who is about to trigger a victory countdown, and why. A civ's score turns red once it already clears the goal the next victory tier will set — that civ starts a countdown the moment the Point Goal drops. Hovering a victory column adds, to each tier section, the Point Goal that tier produces and the arithmetic behind it (for example "Point Goal 240 = x1.5 of 2nd place 160"), plus a note naming the civ whose countdown it would start. Everything is exact arithmetic on current standings, read live from the game database — there are no projections or estimates. UI only: it never changes the rules, and it is safe to add to or remove from a save at any time.</Text>
     </Row>
   </EnglishText>
 </Database>

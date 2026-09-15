@@ -45,7 +45,6 @@
       <Actions>
         <UpdateText>
           <Item>text/en_us/ModInfoText.xml</Item>
-          <Item>text/en_us/InGameText.xml</Item>
         </UpdateText>
         <UIScripts>
           <Item>ui/victory-forecaster/victory-forecaster.js</Item>

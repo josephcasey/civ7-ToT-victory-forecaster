@@ -139,10 +139,14 @@ child. (Matching them on the card itself was the reason an earlier revision inje
 civ7-tot-victory-forecaster.modinfo           — manifest (UIScripts, not ImportFiles)
 ui/victory-forecaster/victory-forecaster.js   — the whole mod
 text/en_us/ModInfoText.xml                    — mod browser strings
-text/en_us/InGameText.xml                     — in-game strings
-scripts/install.sh                            — copy into Mods/ + clear Mods.sqlite (macOS)
+preview.png                                   — Steam Workshop preview (640×640)
+workshop.vdf                                  — Workshop metadata (source of truth)
+scripts/install.sh                            — copy into Mods/ (macOS)
 scripts/view_logs.sh                          — stream [TOT-VF] console output
-scripts/upload_workshop.sh                    — steamcmd Workshop upload
+scripts/gen_preview.py                        — regenerate preview.png
+scripts/build_workshop_vdf.py                 — resolve workshop.vdf for steamcmd
+scripts/upload_workshop.sh                    — two-step Workshop publish
+scripts/steamcmd_upload_with_keychain.expect  — steamcmd login via macOS Keychain
 docs/HANDOFF.md                               — confidence table + verification steps
 ```
 
@@ -156,7 +160,11 @@ VFS, so pointing it at a new path silently loads nothing.
 ./scripts/install.sh
 ```
 
-Enable **ToT Victory Forecaster [Local Dev]** in Additional Content, then restart Civ7.
+Enable **ToT Victory Forecaster** in Additional Content, then restart Civ7.
+
+The installer copies the payload into `Mods/` and only clears `Mods.sqlite` when the manifest
+changed — editing an already-listed script needs a game restart, not a cache wipe, so you do
+not have to quit Civ7 before running it.
 
 ```bash
 ./scripts/view_logs.sh   # stream [TOT-VF] output
@@ -165,12 +173,59 @@ Enable **ToT Victory Forecaster [Local Dev]** in Additional Content, then restar
 ## Verifying
 
 1. Load a Modern-age save and open the Victories screen (trophy button on the HUD).
-2. Each of the four cards should show a `FORECAST` block beneath the player list.
-3. Check `./scripts/view_logs.sh` for the one-shot `[TOT-VF] diagnostics` line. It dumps the
-   detected age %, the tier ladder read from the database, and the top two civs per victory.
-   That line confirms every assumption in one go — if the forecast looks wrong, it says why.
-4. Cross-check one column by hand: hover the card for the game's own tooltip and confirm the
-   mod's "next tier" multiplier and percentage match the tooltip's `Next:` line.
+2. Pick a column where the leader is well ahead. Its top score should be **red** if the leader
+   already clears the next tier's goal, and normal otherwise.
+3. Hover that column. Each tier section of the tooltip should carry a `Point Goal N = ×M of
+   2nd place P` line, and the imminent one should name the civ.
+4. **Check the mod against the game.** The "tier in force" section derives the goal itself; it
+   must equal the Point Goal printed at the top of the card. If those two numbers differ, the
+   mod is wrong.
+5. `./scripts/view_logs.sh` shows a one-shot `[TOT-VF] diagnostics` line plus a `refresh` line
+   per update:
+
+   ```
+   [TOT-VF] refresh {"reason":"dom","cards":4,"tips":1,"hot":1,"cool":3}
+   ```
+
+   `hot` counts red-scored cards, `tips` counts augmented tooltips. A `tip:unmatched` means the
+   victory could not be identified from the tooltip text; `tip:noframes` means the
+   `Card-Frame` sections were not found. `cards: 0` means the card selector itself is stale.
+
+## Publishing to the Steam Workshop
+
+```bash
+./scripts/upload_workshop.sh --changenote "what changed"
+```
+
+`workshop.vdf` is the source of truth for title, description, visibility and the
+`publishedfileid`. The script resolves it into build VDFs; do not edit those by hand.
+
+It runs `workshop_build_item` **twice**, because Steam does not reliably accept content and
+a preview image in the same call:
+
+1. **content** — staged payload, title, description, visibility. No `previewfile`.
+2. **preview** — a minimal VDF carrying only `appid`, `publishedfileid`, `previewfile`.
+
+`contentfolder` is optional in `workshop_build_item`, and omitting it leaves the item's
+existing files untouched — which is what makes the second call safe to run immediately after
+the first. Two things make a preview upload fail *silently*, and the generator refuses rather
+than letting either through:
+
+- **over 1 MB** — rejected with no error message
+- **inside the content folder** — the preview stays at the repo root while content is staged
+  under `build/steam/content/`
+
+Other traps, all enforced by `build_workshop_vdf.py`:
+
+- A straight `"` in the description becomes `\"` in the VDF and Steam's parser stops there,
+  silently truncating everything after it. Use curly quotes; the generator refuses otherwise.
+- `contentfolder` and `previewfile` must be absolute paths.
+- Only the mod payload is staged — the repo root would ship `.git`, `docs/` and `scripts/`.
+
+Login goes through `steamcmd_upload_with_keychain.expect`, since steamcmd needs a real TTY for
+its password prompt. It reads the password from the macOS Keychain (never printing it) and
+surfaces Steam Guard in a dialog. Steam **login** name is `josephcasey`; the Keychain service
+is `civ7-steamcmd-upload`. Civ VII's Workshop app id is `1295660`.
 
 ## Status
 
@@ -187,11 +242,12 @@ settled.
 
 ## Roadmap
 
-- **Phase 1** (current): forecast strip on the Summary tab, Modern age focus.
-  Countdown state (`⏳` line) landed early — `getVictoryCountdownStatus` turned out to be
-  confirmable from the installed build without a runtime test.
-- **Phase 2**: badges on individual player rows; per-victory detail tabs. Those rows are
-  SolidJS-managed and re-render underneath any injected node, so they need a different
-  approach from the append-a-block strategy used for the cards.
-- **Phase 3**: better projection than a two-point linear rate (least-squares over the
-  window), and Exploration-age tier coverage.
+- **Phase 1** (done): red leaderboard score, and goal + derivation in each tooltip tier
+  section. Verified in-game against the game's own Point Goal.
+- **Phase 2**: badges on individual player rows, and the per-victory detail tabs. Those rows
+  are SolidJS-managed and re-render underneath any injected node — though the inline-style
+  approach used for the score colour is probably the way in.
+- **Localization**: the injected strings are built in JS and are English only. Moving them to
+  `LOC_*` keys with `Locale.compose` args would make the mod translatable.
+- **Earlier ages**: only the Modern-age countdown victories have a tier ladder, so the mod has
+  nothing to say before then. Legacy-path progress could be worth surfacing separately.

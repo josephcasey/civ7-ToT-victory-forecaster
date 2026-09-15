@@ -2,10 +2,37 @@
 {
 	"appid"			"1295660"
 	"publishedfileid"	""
-	"contentfolder"		""
-	"previewfile"		""
-	"visibility"		"0"
+	"visibility"		"2"
 	"title"			"ToT Victory Forecaster"
-	"description"		"Augments the in-game Victories screen with a forecast strip under each victory card, naming the civ projected to cross the threshold when the Point Goal next drops. Reads the victory tier ladder live from the game database. No buttons, no user interaction."
+	"description"		"Know who is about to win, and why.
+
+ToT Victory Forecaster annotates the Victories screen with the number the game never shows you: what the Point Goal is about to become, and who already clears it.
+
+[h3]What it does[/h3]
+[list]
+[*] A civ's score turns [b]red[/b] once it already clears the goal the [i]next[/i] victory tier will set — that civ starts a victory countdown the moment the Point Goal drops.
+[*] Hovering a victory column adds, to each tier section of the tooltip, the Point Goal that tier produces and the arithmetic behind it — for example [i]Point Goal 240 = x1.5 of 2nd place 160[/i].
+[*] When a countdown is imminent the tooltip names the civ and the Age Progress percentage at which it starts.
+[/list]
+
+[h3]Why it matters[/h3]
+The Point Goal for a Cultural, Economic or Military victory is a multiple of the [b]second[/b] place score, and that multiple steps down as the Age advances: 2x, then 1.5x, then 1.25x. The goal therefore falls without anyone scoring a single point, and a rival who looks comfortably behind can be one threshold away from a countdown. This mod shows you that threshold before it arrives, and shows the working so you can check it.
+
+[h3]Exact, not predicted[/h3]
+[list]
+[*] Every figure is arithmetic on current standings. No projections, no score-rate estimates, no guesses.
+[*] The victory tier ladder is read live from the game database, so rules mods and future patches are picked up automatically.
+[*] The goal shown for the tier in force is cross-checked against the game's own Point Goal, so an error would be visible on the first hover.
+[/list]
+
+[h3]Safe and lightweight[/h3]
+[list]
+[*] UI only. It reads game state and never changes the rules.
+[*] Does not affect saved games, and is safe to add to or remove from an existing save at any time.
+[*] Civs you have not met stay anonymised, exactly as the base screen presents them.
+[*] Adds no panel and no button. It annotates what the screen already draws.
+[/list]
+
+Currently English only. Built against Civilization VII build 1.4.0. Open source — feedback welcome."
 	"changenote"		"Initial release"
 }

@@ -1,0 +1,85 @@
+#!/usr/bin/env expect -f
+
+set timeout -1
+
+proc applescript_quote {value} {
+    regsub -all {\\} $value {\\\\} value
+    regsub -all {"} $value {\\"} value
+    regsub -all {\r} $value {\\r} value
+    regsub -all {\n} $value {\\n} value
+    return "\"$value\""
+}
+
+proc prompt_with_dialog {title message hidden} {
+    set title_quoted   [applescript_quote $title]
+    set message_quoted [applescript_quote $message]
+    if {$hidden} {
+        set dialog_line [format \
+            {set dialogResult to display dialog %s with title %s default answer "" with hidden answer buttons {"Cancel", "OK"} default button "OK"} \
+            $message_quoted $title_quoted]
+    } else {
+        set dialog_line [format \
+            {set dialogResult to display dialog %s with title %s default answer "" buttons {"Cancel", "OK"} default button "OK"} \
+            $message_quoted $title_quoted]
+    }
+
+    if {[catch {
+        exec osascript \
+            -e {tell application "System Events"} \
+            -e {activate} \
+            -e $dialog_line \
+            -e {text returned of dialogResult} \
+            -e {end tell}
+    } result]} {
+        puts stderr "Interactive prompt failed or was cancelled."
+        puts stderr $result
+        exit 1
+    }
+
+    return [string trim $result]
+}
+
+if {$argc != 3} {
+    puts stderr "Usage: scripts/steamcmd_upload_with_keychain.expect <steam_username> <keychain_service> <workshop_vdf>"
+    exit 1
+}
+
+set steam_username  [lindex $argv 0]
+set keychain_service [lindex $argv 1]
+set workshop_vdf    [lindex $argv 2]
+
+if {[catch {exec security find-generic-password -w -a $steam_username -s $keychain_service} steam_password]} {
+    puts stderr "Unable to read Steam password from macOS Keychain service '$keychain_service' for '$steam_username'."
+    puts stderr $steam_password
+    exit 1
+}
+
+spawn steamcmd +login $steam_username +workshop_build_item $workshop_vdf +quit
+
+expect {
+    -re {(?i)password:\s*$} {
+        send -- "$steam_password\r"
+        exp_continue
+    }
+    -re {(?i)(steam guard.*code|two-factor code|email code|device code|authenticator code|enter .*code.*):\s*$} {
+        set guard_code [prompt_with_dialog \
+            "Steam Guard" \
+            "Enter the Steam Guard code for '$steam_username' to continue the Workshop upload." \
+            0]
+        send -- "$guard_code\r"
+        exp_continue
+    }
+    -re {(?i)code:\s*$} {
+        set guard_code [prompt_with_dialog \
+            "Steam Guard" \
+            "Enter the current Steam Guard code for '$steam_username'." \
+            0]
+        send -- "$guard_code\r"
+        exp_continue
+    }
+    eof {
+        catch wait result
+        set exit_code [lindex $result 3]
+        exit $exit_code
+    }
+}

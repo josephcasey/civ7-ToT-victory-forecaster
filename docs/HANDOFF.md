@@ -56,6 +56,42 @@ injection. A card only exists in the DOM when the victory is already enabled, so
 could only ever produce false negatives. It survives in the diagnostics line, where a wrong
 value is harmless.
 
+## Steam Workshop publishing — the preview image (2026-09-15)
+
+The previous session recorded, in this repo and in the sibling connected-settlements repo,
+that *“preview images can't be uploaded via steamcmd for this app”*. That is **not a hard
+limit** — the working Civ VII upload simply omitted `previewfile` entirely and the image was
+set by hand afterwards.
+
+Researched and rebuilt as a **two-step upload**, which is the pattern Steam's own community
+guide for custom thumbnails describes:
+
+1. **content** — `appid`, `publishedfileid`, `contentfolder`, `visibility`, `title`,
+   `description`, `changenote`. No `previewfile`.
+2. **preview** — a minimal VDF with only `appid`, `publishedfileid`, `previewfile`.
+
+The key fact that makes step 2 safe: **`contentfolder` is optional** in `workshop_build_item`,
+and omitting it leaves the item's already-uploaded files untouched. So the preview call cannot
+clobber the content call.
+
+Two documented causes of a *silent* preview failure, both now refused by
+`scripts/build_workshop_vdf.py` rather than allowed through:
+
+- **Preview over 1 MB** — rejected by Steam with no error. Ours is 47 KB at 640×640.
+- **Preview inside the content folder** — it must sit above it. Content is staged to
+  `build/steam/content/`, so the repo-root `preview.png` is naturally outside.
+
+Also fixed: the old `upload_workshop.sh` set `contentfolder` to the **repo root**, which would
+have shipped `.git`, `docs/`, `scripts/`, the README *and* the preview image as mod content —
+and put the preview inside the content folder, the very thing that breaks it. Content is now
+staged to a clean directory holding only the modinfo, `ui/` and `text/`.
+
+Unverified until the first real publish: whether step 2 actually takes. If it does not, the
+content upload still succeeds and the script says so, and the fallback is the Edit page.
+
+Sources: Steam community guide *Uploading custom thumbnails to the Steam Workshop*
+(`steamcommunity.com/sharedfiles/filedetails/?id=2936720761`).
+
 ## Design change — the panel is retired (2026-09-14)
 
 The appended forecast panel is **gone**. On request, the mod now augments the stock screen:
